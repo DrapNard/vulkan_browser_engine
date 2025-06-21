@@ -3,6 +3,7 @@ use crate::js_engine::JsEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::log;
 
 pub struct ServiceWorkerRuntime {
     js_engine: Arc<RwLock<JsEngine>>,

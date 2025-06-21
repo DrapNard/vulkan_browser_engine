@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 use parking_lot::RwLock;
-use smallvec::SmallVec;
 use thiserror::Error;
 
 use super::{Node, NodeType, document::NodeId};

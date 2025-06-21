@@ -313,6 +313,10 @@ impl Document {
         }
     }
 
+    pub fn get_root_node(&self) -> Option<NodeId> {
+        *self.root_node.read()
+    }
+
     pub fn parse_html(&self, html: &str) -> Result<()> {
         let parse_start = std::time::Instant::now();
         
@@ -333,6 +337,12 @@ impl Document {
         tracing::debug!("HTML parsing completed in {:?}", parse_time);
 
         Ok(())
+    }
+
+    pub fn parse(html: &str) -> Result<Self> {
+        let document = Self::new();
+        document.parse_html(html)?;
+        Ok(document)
     }
 
     pub fn create_node(&self, node_type: NodeType, content: String) -> Result<NodeId> {

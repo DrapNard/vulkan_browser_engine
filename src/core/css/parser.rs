@@ -1,11 +1,7 @@
-use std::sync::Arc;
-use std::collections::HashMap;
-use parking_lot::RwLock;
-use smallvec::SmallVec;
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
 
-use super::{CSSError, CSSValue, ComputedValue, CSSStyleDeclaration, Color};
+use super::CSSStyleDeclaration;
 use crate::core::css::selector::Selector;
 
 #[derive(Error, Debug)]
@@ -58,22 +54,21 @@ impl Token {
     }
 }
 
-pub struct Tokenizer {
-    input: Vec<char>,
+pub struct Tokenizer<'a> {
+    input: &'a str,
     position: usize,
-    current_char: Option<char>,
+    current: Option<char>,
 }
 
-impl Tokenizer {
-    pub fn new(input: &str) -> Self {
-        let chars: Vec<char> = input.chars().collect();
-        let current_char = chars.get(0).copied();
-        
-        Self {
-            input: chars,
+impl<'a> Tokenizer<'a> {
+    pub fn new(input: &'a str) -> Self {
+        let mut tokenizer = Self {
+            input,
             position: 0,
-            current_char,
-        }
+            current: None,
+        };
+        tokenizer.advance();
+        tokenizer
     }
 
     pub fn tokenize(&mut self) -> Vec<Token> {
@@ -90,13 +85,13 @@ impl Tokenizer {
     }
 
     fn next_token(&mut self) -> Option<Token> {
-        while let Some(ch) = self.current_char {
+        while let Some(ch) = self.current {
             match ch {
                 ' ' | '\t' | '\n' | '\r' => {
                     self.consume_whitespace();
                     return Some(Token::Whitespace);
                 }
-                '/' if self.peek_char() == Some('*') => {
+                '/' if self.peek() == Some('*') => {
                     return Some(self.consume_comment());
                 }
                 '(' => {
@@ -135,21 +130,11 @@ impl Tokenizer {
                     self.advance();
                     return Some(Token::Comma);
                 }
-                '#' => {
-                    return Some(self.consume_hash());
-                }
-                '"' | '\'' => {
-                    return Some(self.consume_string(ch));
-                }
-                '@' => {
-                    return Some(self.consume_at_keyword());
-                }
-                '-' | '0'..='9' => {
-                    return Some(self.consume_numeric());
-                }
-                'a'..='z' | 'A'..='Z' | '_' => {
-                    return Some(self.consume_ident_like());
-                }
+                '#' => return Some(self.consume_hash()),
+                '"' | '\'' => return Some(self.consume_string(ch)),
+                '@' => return Some(self.consume_at_keyword()),
+                '-' | '0'..='9' => return Some(self.consume_numeric()),
+                'a'..='z' | 'A'..='Z' | '_' => return Some(self.consume_ident_like()),
                 c => {
                     self.advance();
                     return Some(Token::Delim(c));
@@ -161,146 +146,127 @@ impl Tokenizer {
     }
 
     fn advance(&mut self) {
-        self.position += 1;
-        self.current_char = self.input.get(self.position).copied();
+        if self.position < self.input.len() {
+            self.position += self.current.map_or(0, |c| c.len_utf8());
+            self.current = self.input[self.position..].chars().next();
+        } else {
+            self.current = None;
+        }
     }
 
-    fn peek_char(&self) -> Option<char> {
-        self.input.get(self.position + 1).copied()
+    fn peek(&self) -> Option<char> {
+        if let Some(current_char) = self.current {
+            let next_pos = self.position + current_char.len_utf8();
+            if next_pos < self.input.len() {
+                self.input[next_pos..].chars().next()
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
-    fn consume_whitespace(&mut self) {
-        while let Some(ch) = self.current_char {
-            if matches!(ch, ' ' | '\t' | '\n' | '\r') {
+    fn consume_while<F>(&mut self, predicate: F) -> String 
+    where 
+        F: Fn(char) -> bool 
+    {
+        let start = self.position;
+        while let Some(ch) = self.current {
+            if predicate(ch) {
                 self.advance();
             } else {
                 break;
             }
         }
+        self.input[start..self.position].to_string()
+    }
+
+    fn consume_whitespace(&mut self) {
+        self.consume_while(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r'));
     }
 
     fn consume_comment(&mut self) -> Token {
-        let mut comment = String::new();
-        self.advance(); // consume '/'
-        self.advance(); // consume '*'
+        self.advance();
+        self.advance();
         
-        while let Some(ch) = self.current_char {
-            if ch == '*' && self.peek_char() == Some('/') {
-                self.advance(); // consume '*'
-                self.advance(); // consume '/'
-                break;
+        let start = self.position;
+        while let Some(ch) = self.current {
+            if ch == '*' && self.peek() == Some('/') {
+                let comment = self.input[start..self.position].to_string();
+                self.advance();
+                self.advance();
+                return Token::Comment(comment);
             }
-            comment.push(ch);
             self.advance();
         }
         
-        Token::Comment(comment)
+        Token::Comment(self.input[start..self.position].to_string())
     }
 
     fn consume_string(&mut self, quote: char) -> Token {
-        let mut string = String::new();
-        self.advance(); // consume quote
+        self.advance();
+        let start = self.position;
+        let mut end = start;
         
-        while let Some(ch) = self.current_char {
+        while let Some(ch) = self.current {
             if ch == quote {
+                let string = self.input[start..end].to_string();
                 self.advance();
-                break;
+                return Token::String(string);
             }
             
             if ch == '\\' {
                 self.advance();
-                if let Some(escaped) = self.current_char {
-                    string.push(escaped);
+                if self.current.is_some() {
                     self.advance();
                 }
+                end = self.position;
             } else {
-                string.push(ch);
                 self.advance();
+                end = self.position;
             }
         }
         
-        Token::String(string)
+        Token::String(self.input[start..end].to_string())
     }
 
     fn consume_hash(&mut self) -> Token {
-        let mut hash = String::new();
-        self.advance(); // consume '#'
-        
-        while let Some(ch) = self.current_char {
-            if ch.is_alphanumeric() || ch == '_' || ch == '-' {
-                hash.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        
+        self.advance();
+        let hash = self.consume_while(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-');
         Token::Hash(hash)
     }
 
     fn consume_at_keyword(&mut self) -> Token {
-        let mut keyword = String::new();
-        self.advance(); // consume '@'
-        
-        while let Some(ch) = self.current_char {
-            if ch.is_alphanumeric() || ch == '_' || ch == '-' {
-                keyword.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        
+        self.advance();
+        let keyword = self.consume_while(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-');
         Token::AtKeyword(keyword)
     }
 
     fn consume_numeric(&mut self) -> Token {
-        let mut number_str = String::new();
-        
-        if self.current_char == Some('-') {
-            number_str.push('-');
+        let number_str = if self.current == Some('-') {
             self.advance();
-        }
+            format!("-{}", self.consume_while(|ch| ch.is_ascii_digit()))
+        } else {
+            self.consume_while(|ch| ch.is_ascii_digit())
+        };
+
+        let mut full_number = number_str;
         
-        while let Some(ch) = self.current_char {
-            if ch.is_ascii_digit() {
-                number_str.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        
-        if self.current_char == Some('.') {
-            number_str.push('.');
+        if self.current == Some('.') {
             self.advance();
-            
-            while let Some(ch) = self.current_char {
-                if ch.is_ascii_digit() {
-                    number_str.push(ch);
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
+            let decimal_part = self.consume_while(|ch| ch.is_ascii_digit());
+            full_number = format!("{}.{}", full_number, decimal_part);
         }
         
-        let number: f32 = number_str.parse().unwrap_or(0.0);
+        let number: f32 = full_number.parse().unwrap_or(0.0);
         
-        if self.current_char == Some('%') {
+        if self.current == Some('%') {
             self.advance();
             return Token::Percentage(number);
         }
         
-        let mut unit = String::new();
-        while let Some(ch) = self.current_char {
-            if ch.is_alphabetic() {
-                unit.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
+        let unit = self.consume_while(|ch| ch.is_alphabetic());
         
         if unit.is_empty() {
             Token::Number(number)
@@ -310,43 +276,28 @@ impl Tokenizer {
     }
 
     fn consume_ident_like(&mut self) -> Token {
-        let mut ident = String::new();
+        let ident = self.consume_while(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-');
         
-        while let Some(ch) = self.current_char {
-            if ch.is_alphanumeric() || ch == '_' || ch == '-' {
-                ident.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        
-        if self.current_char == Some('(') {
+        if self.current == Some('(') {
             if ident == "url" {
-                return self.consume_url();
+                self.consume_url()
             } else {
-                return Token::Function(ident);
+                Token::Function(ident)
             }
+        } else {
+            Token::Ident(ident)
         }
-        
-        Token::Ident(ident)
     }
 
     fn consume_url(&mut self) -> Token {
-        self.advance(); // consume '('
-        
-        while let Some(ch) = self.current_char {
-            if !ch.is_whitespace() {
-                break;
-            }
-            self.advance();
-        }
+        self.advance();
+        self.consume_while(|ch| ch.is_whitespace());
         
         let mut url = String::new();
         let mut in_quotes = false;
         let mut quote_char = '"';
         
-        if let Some(ch) = self.current_char {
+        if let Some(ch) = self.current {
             if ch == '"' || ch == '\'' {
                 in_quotes = true;
                 quote_char = ch;
@@ -354,7 +305,7 @@ impl Tokenizer {
             }
         }
         
-        while let Some(ch) = self.current_char {
+        while let Some(ch) = self.current {
             if in_quotes {
                 if ch == quote_char {
                     self.advance();
@@ -363,27 +314,20 @@ impl Tokenizer {
                     url.push(ch);
                     self.advance();
                 }
+            } else if ch == ')' {
+                break;
+            } else if ch.is_whitespace() {
+                break;
             } else {
-                if ch == ')' {
-                    break;
-                } else if ch.is_whitespace() {
-                    break;
-                } else {
-                    url.push(ch);
-                    self.advance();
-                }
+                url.push(ch);
+                self.advance();
             }
         }
         
-        while let Some(ch) = self.current_char {
-            if ch == ')' {
-                self.advance();
-                break;
-            } else if ch.is_whitespace() {
-                self.advance();
-            } else {
-                break;
-            }
+        self.consume_while(|ch| ch.is_whitespace());
+        
+        if self.current == Some(')') {
+            self.advance();
         }
         
         Token::Url(url)
@@ -405,8 +349,38 @@ pub enum CSSRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CSSStyleRule {
     pub selectors: Vec<Selector>,
-    pub declarations: CSSStyleDeclaration,
+    pub declarations: SerializableDeclarations,
     pub specificity: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializableDeclarations {
+    pub properties: Vec<(String, String, bool)>,
+}
+
+impl SerializableDeclarations {
+    pub fn new() -> Self {
+        Self {
+            properties: Vec::new(),
+        }
+    }
+
+    pub fn from_declaration(declaration: &CSSStyleDeclaration) -> Self {
+        Self {
+            properties: declaration.get_all_properties()
+                .into_iter()
+                .map(|(name, value)| (name, value.raw, value.important))
+                .collect(),
+        }
+    }
+
+    pub fn to_declaration(&self) -> CSSStyleDeclaration {
+        let declaration = CSSStyleDeclaration::new();
+        for (property, value, important) in &self.properties {
+            let _ = declaration.set_property(property, value, if *important { "important" } else { "" });
+        }
+        declaration
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -423,7 +397,7 @@ pub struct CSSImportRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CSSFontFaceRule {
-    pub declarations: CSSStyleDeclaration,
+    pub declarations: SerializableDeclarations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -435,19 +409,19 @@ pub struct CSSKeyframesRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CSSKeyframeRule {
     pub offset: KeyframeOffset,
-    pub declarations: CSSStyleDeclaration,
+    pub declarations: SerializableDeclarations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum KeyframeOffset {
     Percentage(f32),
-    Keyword(String), // "from", "to"
+    Keyword(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CSSPageRule {
     pub selector: Option<String>,
-    pub declarations: CSSStyleDeclaration,
+    pub declarations: SerializableDeclarations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -592,7 +566,7 @@ impl CSSParser {
     }
 
     fn parse_media_rule(&mut self) -> Result<CSSRule> {
-        self.advance(); // consume @media
+        self.advance();
         self.skip_whitespace();
         
         let media_query = self.parse_media_query()?;
@@ -614,7 +588,7 @@ impl CSSParser {
     }
 
     fn parse_import_rule(&mut self) -> Result<CSSRule> {
-        self.advance(); // consume @import
+        self.advance();
         self.skip_whitespace();
         
         let href = match self.current_token() {
@@ -648,7 +622,7 @@ impl CSSParser {
     }
 
     fn parse_font_face_rule(&mut self) -> Result<CSSRule> {
-        self.advance(); // consume @font-face
+        self.advance();
         self.skip_whitespace();
         
         self.expect_token(&Token::LeftBrace)?;
@@ -661,7 +635,7 @@ impl CSSParser {
     }
 
     fn parse_keyframes_rule(&mut self) -> Result<CSSRule> {
-        self.advance(); // consume @keyframes
+        self.advance();
         self.skip_whitespace();
         
         let name = match self.current_token() {
@@ -720,7 +694,7 @@ impl CSSParser {
     }
 
     fn parse_page_rule(&mut self) -> Result<CSSRule> {
-        self.advance(); // consume @page
+        self.advance();
         self.skip_whitespace();
         
         let selector = if let Some(Token::Ident(s)) = self.current_token() {
@@ -745,7 +719,7 @@ impl CSSParser {
     }
 
     fn parse_namespace_rule(&mut self) -> Result<CSSRule> {
-        self.advance(); // consume @namespace
+        self.advance();
         self.skip_whitespace();
         
         let (prefix, namespace_uri) = if let Some(Token::Ident(prefix)) = self.current_token() {
@@ -781,7 +755,7 @@ impl CSSParser {
     }
 
     fn parse_supports_rule(&mut self) -> Result<CSSRule> {
-        self.advance(); // consume @supports
+        self.advance();
         self.skip_whitespace();
         
         let mut condition = String::new();
@@ -905,7 +879,7 @@ impl CSSParser {
                     }
                 }
                 Some(Token::Whitespace) => {
-                    if !selector_text.ends_with(' ') {
+                    if !selector_text.ends_with(' ') && !selector_text.is_empty() {
                         selector_text.push(' ');
                     }
                 }
@@ -919,8 +893,8 @@ impl CSSParser {
             .map_err(|e| ParseError::InvalidSelector(e.to_string()))
     }
 
-    fn parse_declarations_block(&mut self) -> Result<CSSStyleDeclaration> {
-        let declarations = CSSStyleDeclaration::new();
+    fn parse_declarations_block(&mut self) -> Result<SerializableDeclarations> {
+        let mut properties = Vec::new();
         
         while !self.check_token(&Token::RightBrace) && !self.is_at_end() {
             self.skip_whitespace();
@@ -930,13 +904,13 @@ impl CSSParser {
             }
 
             if let Ok((property, value, important)) = self.parse_declaration() {
-                let _ = declarations.set_property(&property, &value, if important { "important" } else { "" });
+                properties.push((property, value, important));
             }
 
             self.consume_if_match(&Token::Semicolon);
         }
 
-        Ok(declarations)
+        Ok(SerializableDeclarations { properties })
     }
 
     fn parse_declaration(&mut self) -> Result<(String, String, bool)> {
@@ -1092,7 +1066,7 @@ impl CSSParser {
         }
 
         while self.check_token(&Token::LeftParen) && !self.is_at_end() {
-            self.advance(); // consume '('
+            self.advance();
             
             let mut feature = String::new();
             let mut value = None;
@@ -1235,5 +1209,11 @@ impl CSSParser {
             }
             self.advance();
         }
+    }
+}
+
+impl Default for CSSParser {
+    fn default() -> Self {
+        Self::new()
     }
 }

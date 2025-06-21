@@ -1,6 +1,7 @@
 use super::{SecurityEvent, SecuritySeverity, ThreatLevel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::log;
 
 pub struct SecurityPolicyEngine {
     policies: Vec<SecurityPolicy>,

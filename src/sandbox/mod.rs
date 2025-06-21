@@ -6,7 +6,7 @@ pub mod security;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
+use tracing::log;
 pub struct SandboxManager {
     processes: Arc<RwLock<HashMap<ProcessId, process::SandboxedProcess>>>,
     permission_manager: permissions::PermissionManager,

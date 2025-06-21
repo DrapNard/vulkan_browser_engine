@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Duration};
+use tracing::log;
 
 pub struct ProcessManager {
     processes: Arc<RwLock<HashMap<u32, SandboxedProcess>>>,

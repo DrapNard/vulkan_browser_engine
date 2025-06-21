@@ -2,9 +2,10 @@ pub mod heap;
 
 pub use heap::*;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::log;
 
 pub struct GarbageCollector {
     heap: Arc<RwLock<Heap>>,

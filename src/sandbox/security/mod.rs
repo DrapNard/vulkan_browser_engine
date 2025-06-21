@@ -7,6 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::log;
 
 pub struct SecurityFramework {
     policy_engine: Arc<RwLock<SecurityPolicyEngine>>,

@@ -5,6 +5,7 @@ pub use runtime::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::log;
 
 pub struct ServiceWorkerManager {
     workers: Arc<RwLock<HashMap<String, ServiceWorker>>>,

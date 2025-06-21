@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::log;
 
 pub struct ModuleSystem {
     module_cache: Arc<RwLock<HashMap<String, Arc<Module>>>>,

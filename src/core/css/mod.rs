@@ -3,18 +3,14 @@ pub mod parser;
 pub mod selector;
 
 pub use computed::{ComputedStyles, StyleEngine};
-pub use parser::{CSSParser, CSSRule, CSSStyleRule, CSSMediaRule, CSSImportRule, CSSFontFaceRule, CSSKeyframesRule, CSSKeyframeRule};
+pub use parser::{CSSParser, CSSRule, CSSStyleRule, CSSMediaRule, CSSImportRule, CSSFontFaceRule, CSSKeyframesRule, CSSKeyframeRule, ParseError};
 pub use selector::{SelectorEngine, Selector, SelectorMatcher, Specificity};
 
 use std::sync::Arc;
-use std::collections::HashMap;
-use parking_lot::{RwLock, Mutex};
+use parking_lot::RwLock;
 use dashmap::DashMap;
-use smallvec::SmallVec;
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
-
-use crate::core::dom::{Document, NodeId, Element};
 
 #[derive(Error, Debug)]
 pub enum CSSError {
@@ -32,14 +28,33 @@ pub enum CSSError {
     Animation(String),
 }
 
+impl From<ParseError> for CSSError {
+    fn from(err: ParseError) -> Self {
+        CSSError::Parse(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, CSSError>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CSSValue {
     pub raw: String,
     pub computed: ComputedValue,
     pub unit: Option<CSSUnit>,
     pub important: bool,
+}
+
+impl CSSValue {
+    pub fn new(raw: String, computed: ComputedValue, unit: Option<CSSUnit>, important: bool) -> Self {
+        Self { raw, computed, unit, important }
+    }
+
+    pub fn approximate_eq(&self, other: &Self) -> bool {
+        self.raw == other.raw && 
+        self.computed.approximate_eq(&other.computed) &&
+        self.unit == other.unit &&
+        self.important == other.important
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,36 +80,49 @@ pub enum ComputedValue {
     Revert,
 }
 
+impl ComputedValue {
+    const EPSILON: f32 = 1e-6;
+
+    pub fn approximate_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ComputedValue::Length(a), ComputedValue::Length(b)) => (a - b).abs() < Self::EPSILON,
+            (ComputedValue::Percentage(a), ComputedValue::Percentage(b)) => (a - b).abs() < Self::EPSILON,
+            (ComputedValue::Number(a), ComputedValue::Number(b)) => (a - b).abs() < Self::EPSILON,
+            (ComputedValue::Integer(a), ComputedValue::Integer(b)) => a == b,
+            (ComputedValue::String(a), ComputedValue::String(b)) => a == b,
+            (ComputedValue::Keyword(a), ComputedValue::Keyword(b)) => a == b,
+            (ComputedValue::Color(a), ComputedValue::Color(b)) => a.approximate_eq(b),
+            (ComputedValue::Url(a), ComputedValue::Url(b)) => a == b,
+            (ComputedValue::Function { name: n1, args: a1 }, ComputedValue::Function { name: n2, args: a2 }) => {
+                n1 == n2 && a1.len() == a2.len() && a1.iter().zip(a2.iter()).all(|(x, y)| x.approximate_eq(y))
+            },
+            (ComputedValue::List(a), ComputedValue::List(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.approximate_eq(y))
+            },
+            _ => std::mem::discriminant(self) == std::mem::discriminant(other),
+        }
+    }
+
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, ComputedValue::Length(_) | ComputedValue::Percentage(_) | ComputedValue::Number(_) | ComputedValue::Integer(_))
+    }
+
+    pub fn to_f32(&self) -> Option<f32> {
+        match self {
+            ComputedValue::Length(v) | ComputedValue::Percentage(v) | ComputedValue::Number(v) => Some(*v),
+            ComputedValue::Integer(v) => Some(*v as f32),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CSSUnit {
-    Px,
-    Em,
-    Rem,
-    Vh,
-    Vw,
-    Vmin,
-    Vmax,
-    Percent,
-    Pt,
-    Pc,
-    In,
-    Cm,
-    Mm,
-    Ex,
-    Ch,
-    Q,
-    Deg,
-    Rad,
-    Grad,
-    Turn,
-    S,
-    Ms,
-    Hz,
-    Khz,
-    Dpi,
-    Dpcm,
-    Dppx,
-    Fr,
+    Px, Em, Rem, Vh, Vw, Vmin, Vmax, Percent,
+    Pt, Pc, In, Cm, Mm, Ex, Ch, Q,
+    Deg, Rad, Grad, Turn,
+    S, Ms, Hz, Khz,
+    Dpi, Dpcm, Dppx, Fr,
 }
 
 impl CSSUnit {
@@ -147,6 +175,40 @@ impl CSSUnit {
             _ => value,
         }
     }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "px" => Some(CSSUnit::Px),
+            "em" => Some(CSSUnit::Em),
+            "rem" => Some(CSSUnit::Rem),
+            "vh" => Some(CSSUnit::Vh),
+            "vw" => Some(CSSUnit::Vw),
+            "vmin" => Some(CSSUnit::Vmin),
+            "vmax" => Some(CSSUnit::Vmax),
+            "%" => Some(CSSUnit::Percent),
+            "pt" => Some(CSSUnit::Pt),
+            "pc" => Some(CSSUnit::Pc),
+            "in" => Some(CSSUnit::In),
+            "cm" => Some(CSSUnit::Cm),
+            "mm" => Some(CSSUnit::Mm),
+            "ex" => Some(CSSUnit::Ex),
+            "ch" => Some(CSSUnit::Ch),
+            "q" => Some(CSSUnit::Q),
+            "deg" => Some(CSSUnit::Deg),
+            "rad" => Some(CSSUnit::Rad),
+            "grad" => Some(CSSUnit::Grad),
+            "turn" => Some(CSSUnit::Turn),
+            "s" => Some(CSSUnit::S),
+            "ms" => Some(CSSUnit::Ms),
+            "hz" => Some(CSSUnit::Hz),
+            "khz" => Some(CSSUnit::Khz),
+            "dpi" => Some(CSSUnit::Dpi),
+            "dpcm" => Some(CSSUnit::Dpcm),
+            "dppx" => Some(CSSUnit::Dppx),
+            "fr" => Some(CSSUnit::Fr),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,7 +221,14 @@ pub struct Color {
 
 impl Color {
     pub fn new(r: u8, g: u8, b: u8, a: f32) -> Self {
-        Self { r, g, b, a }
+        Self { r, g, b, a: a.clamp(0.0, 1.0) }
+    }
+
+    pub fn approximate_eq(&self, other: &Self) -> bool {
+        self.r == other.r && 
+        self.g == other.g && 
+        self.b == other.b && 
+        (self.a - other.a).abs() < 1e-6
     }
 
     pub fn from_hex(hex: &str) -> Option<Self> {
@@ -194,7 +263,7 @@ impl Color {
     }
 
     pub fn from_rgba(r: u8, g: u8, b: u8, a: f32) -> Self {
-        Self::new(r, g, b, a.clamp(0.0, 1.0))
+        Self::new(r, g, b, a)
     }
 
     pub fn from_hsl(h: f32, s: f32, l: f32) -> Self {
@@ -202,22 +271,22 @@ impl Color {
         let s = s.clamp(0.0, 1.0);
         let l = l.clamp(0.0, 1.0);
 
+        if s == 0.0 {
+            let gray = (l * 255.0) as u8;
+            return Self::new(gray, gray, gray, 1.0);
+        }
+
         let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
         let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
         let m = l - c / 2.0;
 
-        let (r_prime, g_prime, b_prime) = if h < 60.0 {
-            (c, x, 0.0)
-        } else if h < 120.0 {
-            (x, c, 0.0)
-        } else if h < 180.0 {
-            (0.0, c, x)
-        } else if h < 240.0 {
-            (0.0, x, c)
-        } else if h < 300.0 {
-            (x, 0.0, c)
-        } else {
-            (c, 0.0, x)
+        let (r_prime, g_prime, b_prime) = match h {
+            h if h < 60.0 => (c, x, 0.0),
+            h if h < 120.0 => (x, c, 0.0),
+            h if h < 180.0 => (0.0, c, x),
+            h if h < 240.0 => (0.0, x, c),
+            h if h < 300.0 => (x, 0.0, c),
+            _ => (c, 0.0, x),
         };
 
         let r = ((r_prime + m) * 255.0) as u8;
@@ -244,24 +313,21 @@ impl Color {
     }
 
     pub fn luminance(&self) -> f32 {
-        let r = self.r as f32 / 255.0;
-        let g = self.g as f32 / 255.0;
-        let b = self.b as f32 / 255.0;
+        let to_linear = |c: f32| {
+            if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
 
-        let r_linear = if r <= 0.03928 { r / 12.92 } else { ((r + 0.055) / 1.055).powf(2.4) };
-        let g_linear = if g <= 0.03928 { g / 12.92 } else { ((g + 0.055) / 1.055).powf(2.4) };
-        let b_linear = if b <= 0.03928 { b / 12.92 } else { ((b + 0.055) / 1.055).powf(2.4) };
+        let r = to_linear(self.r as f32 / 255.0);
+        let g = to_linear(self.g as f32 / 255.0);
+        let b = to_linear(self.b as f32 / 255.0);
 
-        0.2126 * r_linear + 0.7152 * g_linear + 0.0722 * b_linear
+        0.2126 * r + 0.7152 * g + 0.0722 * b
     }
 
     pub fn contrast_ratio(&self, other: &Color) -> f32 {
         let l1 = self.luminance();
         let l2 = other.luminance();
-        
-        let lighter = l1.max(l2);
-        let darker = l1.min(l2);
-        
+        let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
         (lighter + 0.05) / (darker + 0.05)
     }
 
@@ -285,30 +351,30 @@ impl Color {
     pub const TRANSPARENT: Color = Color { r: 0, g: 0, b: 0, a: 0.0 };
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CSSStyleDeclaration {
-    properties: Arc<DashMap<String, CSSValue>>,
+    properties: DashMap<String, CSSValue>,
     parent_rule: Option<Arc<CSSRule>>,
-    css_text: Arc<RwLock<String>>,
-    length: Arc<RwLock<usize>>,
+    css_text: RwLock<String>,
+    length: RwLock<usize>,
 }
 
 impl CSSStyleDeclaration {
     pub fn new() -> Self {
         Self {
-            properties: Arc::new(DashMap::new()),
+            properties: DashMap::new(),
             parent_rule: None,
-            css_text: Arc::new(RwLock::new(String::new())),
-            length: Arc::new(RwLock::new(0)),
+            css_text: RwLock::new(String::new()),
+            length: RwLock::new(0),
         }
     }
 
     pub fn with_parent_rule(parent_rule: Arc<CSSRule>) -> Self {
         Self {
-            properties: Arc::new(DashMap::new()),
+            properties: DashMap::new(),
             parent_rule: Some(parent_rule),
-            css_text: Arc::new(RwLock::new(String::new())),
-            length: Arc::new(RwLock::new(0)),
+            css_text: RwLock::new(String::new()),
+            length: RwLock::new(0),
         }
     }
 
@@ -324,21 +390,13 @@ impl CSSStyleDeclaration {
 
     pub fn set_property(&self, property: &str, value: &str, priority: &str) -> Result<()> {
         let important = priority == "important";
-        
-        let css_value = CSSValue {
-            raw: value.to_string(),
-            computed: self.parse_value(value)?,
-            unit: self.parse_unit(value),
-            important,
-        };
+        let css_value = self.parse_css_value(value, important)?;
 
+        let is_new = !self.properties.contains_key(property);
         self.properties.insert(property.to_string(), css_value);
         
-        {
-            let mut length = self.length.write();
-            if !self.properties.contains_key(property) {
-                *length += 1;
-            }
+        if is_new {
+            *self.length.write() += 1;
         }
 
         self.update_css_text();
@@ -347,9 +405,7 @@ impl CSSStyleDeclaration {
 
     pub fn remove_property(&self, property: &str) -> Result<String> {
         if let Some((_, css_value)) = self.properties.remove(property) {
-            let mut length = self.length.write();
-            *length = (*length).saturating_sub(1);
-            
+            *self.length.write() = self.length.read().saturating_sub(1);
             self.update_css_text();
             Ok(css_value.raw)
         } else {
@@ -358,9 +414,7 @@ impl CSSStyleDeclaration {
     }
 
     pub fn item(&self, index: usize) -> Option<String> {
-        self.properties.iter()
-            .nth(index)
-            .map(|entry| entry.key().clone())
+        self.properties.iter().nth(index).map(|entry| entry.key().clone())
     }
 
     pub fn get_length(&self) -> usize {
@@ -385,13 +439,20 @@ impl CSSStyleDeclaration {
         Ok(())
     }
 
-    fn parse_value(&self, value: &str) -> Result<ComputedValue> {
+    fn parse_css_value(&self, value: &str, important: bool) -> Result<CSSValue> {
         let value = value.trim();
-
+        
         if value.is_empty() {
-            return Ok(ComputedValue::None);
+            return Ok(CSSValue::new(value.to_string(), ComputedValue::None, None, important));
         }
 
+        let computed = self.parse_computed_value(value)?;
+        let unit = self.extract_unit(value);
+
+        Ok(CSSValue::new(value.to_string(), computed, unit, important))
+    }
+
+    fn parse_computed_value(&self, value: &str) -> Result<ComputedValue> {
         match value {
             "auto" => Ok(ComputedValue::Auto),
             "initial" => Ok(ComputedValue::Initial),
@@ -400,15 +461,13 @@ impl CSSStyleDeclaration {
             "revert" => Ok(ComputedValue::Revert),
             _ => {
                 if value.starts_with('#') {
-                    if let Some(color) = Color::from_hex(value) {
-                        return Ok(ComputedValue::Color(color));
-                    }
+                    return Color::from_hex(value)
+                        .map(ComputedValue::Color)
+                        .ok_or_else(|| CSSError::InvalidValue(format!("Invalid hex color: {}", value)));
                 }
 
                 if value.starts_with("rgb(") || value.starts_with("rgba(") {
-                    if let Some(color) = self.parse_color_function(value) {
-                        return Ok(ComputedValue::Color(color));
-                    }
+                    return self.parse_color_function(value);
                 }
 
                 if value.starts_with("url(") {
@@ -417,23 +476,16 @@ impl CSSStyleDeclaration {
                     return Ok(ComputedValue::Url(url.to_string()));
                 }
 
-                if let Some((number, unit)) = self.parse_number_with_unit(value) {
-                    return Ok(match unit {
-                        Some(_) => ComputedValue::Length(number),
-                        None => {
-                            if number.fract() == 0.0 {
-                                ComputedValue::Integer(number as i32)
-                            } else {
-                                ComputedValue::Number(number)
-                            }
-                        }
+                if let Some((number, _)) = self.parse_number_with_unit(value) {
+                    return Ok(if value.ends_with('%') {
+                        ComputedValue::Percentage(number)
+                    } else if number.fract() == 0.0 && !value.contains('.') {
+                        ComputedValue::Integer(number as i32)
+                    } else if self.extract_unit(value).is_some() {
+                        ComputedValue::Length(number)
+                    } else {
+                        ComputedValue::Number(number)
                     });
-                }
-
-                if value.ends_with('%') {
-                    if let Ok(number) = value.trim_end_matches('%').parse::<f32>() {
-                        return Ok(ComputedValue::Percentage(number));
-                    }
                 }
 
                 if value.contains('(') && value.ends_with(')') {
@@ -449,42 +501,20 @@ impl CSSStyleDeclaration {
         }
     }
 
-    fn parse_unit(&self, value: &str) -> Option<CSSUnit> {
-        let value = value.trim();
-        
-        if value.ends_with("px") { Some(CSSUnit::Px) }
-        else if value.ends_with("em") { Some(CSSUnit::Em) }
-        else if value.ends_with("rem") { Some(CSSUnit::Rem) }
-        else if value.ends_with("vh") { Some(CSSUnit::Vh) }
-        else if value.ends_with("vw") { Some(CSSUnit::Vw) }
-        else if value.ends_with("vmin") { Some(CSSUnit::Vmin) }
-        else if value.ends_with("vmax") { Some(CSSUnit::Vmax) }
-        else if value.ends_with("%") { Some(CSSUnit::Percent) }
-        else if value.ends_with("pt") { Some(CSSUnit::Pt) }
-        else if value.ends_with("pc") { Some(CSSUnit::Pc) }
-        else if value.ends_with("in") { Some(CSSUnit::In) }
-        else if value.ends_with("cm") { Some(CSSUnit::Cm) }
-        else if value.ends_with("mm") { Some(CSSUnit::Mm) }
-        else if value.ends_with("ex") { Some(CSSUnit::Ex) }
-        else if value.ends_with("ch") { Some(CSSUnit::Ch) }
-        else if value.ends_with("q") { Some(CSSUnit::Q) }
-        else if value.ends_with("deg") { Some(CSSUnit::Deg) }
-        else if value.ends_with("rad") { Some(CSSUnit::Rad) }
-        else if value.ends_with("grad") { Some(CSSUnit::Grad) }
-        else if value.ends_with("turn") { Some(CSSUnit::Turn) }
-        else if value.ends_with("s") { Some(CSSUnit::S) }
-        else if value.ends_with("ms") { Some(CSSUnit::Ms) }
-        else if value.ends_with("hz") { Some(CSSUnit::Hz) }
-        else if value.ends_with("khz") { Some(CSSUnit::Khz) }
-        else if value.ends_with("dpi") { Some(CSSUnit::Dpi) }
-        else if value.ends_with("dpcm") { Some(CSSUnit::Dpcm) }
-        else if value.ends_with("dppx") { Some(CSSUnit::Dppx) }
-        else if value.ends_with("fr") { Some(CSSUnit::Fr) }
-        else { None }
+    fn extract_unit(&self, value: &str) -> Option<CSSUnit> {
+        for suffix_len in (1..=5).rev() {
+            if value.len() > suffix_len {
+                let suffix = &value[value.len() - suffix_len..];
+                if let Some(unit) = CSSUnit::from_str(suffix) {
+                    return Some(unit);
+                }
+            }
+        }
+        None
     }
 
     fn parse_number_with_unit(&self, value: &str) -> Option<(f32, Option<CSSUnit>)> {
-        let unit = self.parse_unit(value);
+        let unit = self.extract_unit(value);
         
         let number_part = if let Some(unit) = unit {
             let unit_str = match unit {
@@ -496,7 +526,26 @@ impl CSSStyleDeclaration {
                 CSSUnit::Vmin => "vmin",
                 CSSUnit::Vmax => "vmax",
                 CSSUnit::Percent => "%",
-                _ => "",
+                CSSUnit::Pt => "pt",
+                CSSUnit::Pc => "pc",
+                CSSUnit::In => "in",
+                CSSUnit::Cm => "cm",
+                CSSUnit::Mm => "mm",
+                CSSUnit::Ex => "ex",
+                CSSUnit::Ch => "ch",
+                CSSUnit::Q => "q",
+                CSSUnit::Deg => "deg",
+                CSSUnit::Rad => "rad",
+                CSSUnit::Grad => "grad",
+                CSSUnit::Turn => "turn",
+                CSSUnit::S => "s",
+                CSSUnit::Ms => "ms",
+                CSSUnit::Hz => "hz",
+                CSSUnit::Khz => "khz",
+                CSSUnit::Dpi => "dpi",
+                CSSUnit::Dpcm => "dpcm",
+                CSSUnit::Dppx => "dppx",
+                CSSUnit::Fr => "fr",
             };
             value.trim_end_matches(unit_str)
         } else {
@@ -506,31 +555,31 @@ impl CSSStyleDeclaration {
         number_part.parse::<f32>().ok().map(|n| (n, unit))
     }
 
-    fn parse_color_function(&self, value: &str) -> Option<Color> {
+    fn parse_color_function(&self, value: &str) -> Result<ComputedValue> {
         if value.starts_with("rgb(") {
             let content = value.trim_start_matches("rgb(").trim_end_matches(')');
             let parts: Vec<&str> = content.split(',').map(|s| s.trim()).collect();
             
             if parts.len() == 3 {
-                let r = parts[0].parse::<u8>().ok()?;
-                let g = parts[1].parse::<u8>().ok()?;
-                let b = parts[2].parse::<u8>().ok()?;
-                return Some(Color::from_rgb(r, g, b));
+                let r = parts[0].parse::<u8>().map_err(|_| CSSError::InvalidValue("Invalid red component".to_string()))?;
+                let g = parts[1].parse::<u8>().map_err(|_| CSSError::InvalidValue("Invalid green component".to_string()))?;
+                let b = parts[2].parse::<u8>().map_err(|_| CSSError::InvalidValue("Invalid blue component".to_string()))?;
+                return Ok(ComputedValue::Color(Color::from_rgb(r, g, b)));
             }
         } else if value.starts_with("rgba(") {
             let content = value.trim_start_matches("rgba(").trim_end_matches(')');
             let parts: Vec<&str> = content.split(',').map(|s| s.trim()).collect();
             
             if parts.len() == 4 {
-                let r = parts[0].parse::<u8>().ok()?;
-                let g = parts[1].parse::<u8>().ok()?;
-                let b = parts[2].parse::<u8>().ok()?;
-                let a = parts[3].parse::<f32>().ok()?;
-                return Some(Color::from_rgba(r, g, b, a));
+                let r = parts[0].parse::<u8>().map_err(|_| CSSError::InvalidValue("Invalid red component".to_string()))?;
+                let g = parts[1].parse::<u8>().map_err(|_| CSSError::InvalidValue("Invalid green component".to_string()))?;
+                let b = parts[2].parse::<u8>().map_err(|_| CSSError::InvalidValue("Invalid blue component".to_string()))?;
+                let a = parts[3].parse::<f32>().map_err(|_| CSSError::InvalidValue("Invalid alpha component".to_string()))?;
+                return Ok(ComputedValue::Color(Color::from_rgba(r, g, b, a)));
             }
         }
         
-        None
+        Err(CSSError::InvalidValue(format!("Invalid color function: {}", value)))
     }
 
     fn parse_function(&self, value: &str) -> Result<ComputedValue> {
@@ -541,7 +590,7 @@ impl CSSStyleDeclaration {
         let mut args = Vec::new();
         if !args_str.is_empty() {
             for arg in args_str.split(',') {
-                args.push(self.parse_value(arg.trim())?);
+                args.push(self.parse_computed_value(arg.trim())?);
             }
         }
 
@@ -554,7 +603,7 @@ impl CSSStyleDeclaration {
     fn parse_list(&self, value: &str) -> Result<ComputedValue> {
         let items: Result<Vec<ComputedValue>> = value
             .split_whitespace()
-            .map(|item| self.parse_value(item))
+            .map(|item| self.parse_computed_value(item))
             .collect();
         
         Ok(ComputedValue::List(items?))
@@ -602,6 +651,12 @@ impl CSSStyleDeclaration {
     }
 }
 
+impl Default for CSSStyleDeclaration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutContext {
     pub viewport_width: f32,
@@ -641,5 +696,29 @@ impl Default for LayoutContext {
             writing_mode: WritingMode::HorizontalTb,
             direction: Direction::Ltr,
         }
+    }
+}
+
+impl LayoutContext {
+    pub fn with_viewport(mut self, width: f32, height: f32) -> Self {
+        self.viewport_width = width;
+        self.viewport_height = height;
+        self
+    }
+
+    pub fn with_containing_block(mut self, width: f32, height: f32) -> Self {
+        self.containing_block_width = width;
+        self.containing_block_height = height;
+        self
+    }
+
+    pub fn with_font_size(mut self, size: f32) -> Self {
+        self.font_size = size;
+        self
+    }
+
+    pub fn with_root_font_size(mut self, size: f32) -> Self {
+        self.root_font_size = size;
+        self
     }
 }

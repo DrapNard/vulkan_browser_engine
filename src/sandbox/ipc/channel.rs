@@ -2,6 +2,7 @@ use super::{IpcError, IpcMessage, MessagePriority};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
+use tracing::log;
 
 pub struct IpcChannel {
     process_a: u32,

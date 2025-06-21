@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
+use tracing::log;
 
 pub struct IpcManager {
     channels: Arc<RwLock<HashMap<ChannelId, IpcChannel>>>,

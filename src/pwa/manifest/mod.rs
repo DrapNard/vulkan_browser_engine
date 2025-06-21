@@ -3,7 +3,6 @@ pub mod parser;
 pub use parser::*;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {

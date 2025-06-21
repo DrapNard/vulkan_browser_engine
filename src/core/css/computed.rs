@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use std::collections::HashMap;
-use parking_lot::{RwLock, Mutex};
+use parking_lot::RwLock;
 use dashmap::DashMap;
-use smallvec::SmallVec;
 use thiserror::Error;
 
-use super::{CSSError, CSSValue, ComputedValue, CSSUnit, Color, LayoutContext, CSSStyleDeclaration};
+use super::{CSSValue, ComputedValue, Color, LayoutContext};
 use super::parser::{CSSRule, CSSStyleRule, CSSMediaRule};
-use super::selector::{SelectorEngine, Selector};
-use crate::core::dom::{Document, NodeId, Node};
+use super::selector::SelectorEngine;
+use crate::core::dom::{Document, NodeId};
 
 #[derive(Error, Debug)]
 pub enum ComputedStyleError {
@@ -53,25 +52,25 @@ pub enum ComputedValueType {
     ListOfComponentValues,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ComputedStyles {
-    properties: Arc<DashMap<String, ComputedValue>>,
-    specificity_map: Arc<DashMap<String, u32>>,
-    source_map: Arc<DashMap<String, String>>,
+    properties: DashMap<String, ComputedValue>,
+    specificity_map: DashMap<String, u32>,
+    source_map: DashMap<String, String>,
     parent_styles: Option<Arc<ComputedStyles>>,
     context: LayoutContext,
-    is_dirty: Arc<RwLock<bool>>,
+    is_dirty: RwLock<bool>,
 }
 
 impl ComputedStyles {
     pub fn new(context: LayoutContext) -> Self {
         let mut styles = Self {
-            properties: Arc::new(DashMap::new()),
-            specificity_map: Arc::new(DashMap::new()),
-            source_map: Arc::new(DashMap::new()),
+            properties: DashMap::new(),
+            specificity_map: DashMap::new(),
+            source_map: DashMap::new(),
             parent_styles: None,
             context,
-            is_dirty: Arc::new(RwLock::new(true)),
+            is_dirty: RwLock::new(true),
         };
 
         styles.initialize_defaults();
@@ -80,12 +79,12 @@ impl ComputedStyles {
 
     pub fn with_parent(context: LayoutContext, parent: Arc<ComputedStyles>) -> Self {
         let mut styles = Self {
-            properties: Arc::new(DashMap::new()),
-            specificity_map: Arc::new(DashMap::new()),
-            source_map: Arc::new(DashMap::new()),
+            properties: DashMap::new(),
+            specificity_map: DashMap::new(),
+            source_map: DashMap::new(),
             parent_styles: Some(parent),
             context,
-            is_dirty: Arc::new(RwLock::new(true)),
+            is_dirty: RwLock::new(true),
         };
 
         styles.initialize_defaults();
@@ -94,18 +93,14 @@ impl ComputedStyles {
     }
 
     fn initialize_defaults(&mut self) {
-        let default_properties = Self::get_default_properties();
-        
-        for property in default_properties {
+        for property in Self::get_default_properties() {
             self.properties.insert(property.name.clone(), property.initial_value);
         }
     }
 
-    fn inherit_from_parent(&mut self) {
+    fn inherit_from_parent(&self) {
         if let Some(ref parent) = self.parent_styles {
-            let inherited_properties = Self::get_inherited_properties();
-            
-            for property_name in inherited_properties {
+            for property_name in Self::get_inherited_properties() {
                 if let Some(parent_value) = parent.properties.get(&property_name) {
                     self.properties.insert(property_name, parent_value.clone());
                 }
@@ -116,7 +111,7 @@ impl ComputedStyles {
     pub fn set_property(&self, name: &str, value: ComputedValue, specificity: u32, source: &str) {
         if let Some(current_specificity) = self.specificity_map.get(name) {
             if specificity < *current_specificity {
-                return; // Don't override higher specificity
+                return;
             }
         }
 
@@ -138,38 +133,26 @@ impl ComputedStyles {
         }
     }
 
-    pub fn resolve_computed_value(&self, property_name: &str, value: &ComputedValue) -> Result<ComputedValue> {
+    fn resolve_computed_value(&self, property_name: &str, value: &ComputedValue) -> Result<ComputedValue> {
         match value {
-            ComputedValue::Length(length) => {
-                Ok(ComputedValue::Length(*length))
-            }
+            ComputedValue::Length(length) => Ok(ComputedValue::Length(*length)),
             ComputedValue::Percentage(percentage) => {
                 let base = self.get_percentage_base(property_name);
                 let resolved = self.resolve_percentage(*percentage, base)?;
                 Ok(ComputedValue::Length(resolved))
             }
-            ComputedValue::Auto => {
-                self.resolve_auto_value(property_name)
-            }
-            ComputedValue::Initial => {
-                self.get_initial_value(property_name)
-            }
-            ComputedValue::Inherit => {
-                self.get_inherited_value(property_name)
-            }
+            ComputedValue::Auto => self.resolve_auto_value(property_name),
+            ComputedValue::Initial => self.get_initial_value(property_name),
+            ComputedValue::Inherit => self.get_inherited_value(property_name),
             ComputedValue::Unset => {
-                if self.is_inherited_property(property_name) {
+                if Self::is_inherited_property(property_name) {
                     self.get_inherited_value(property_name)
                 } else {
                     self.get_initial_value(property_name)
                 }
             }
-            ComputedValue::Revert => {
-                self.get_user_agent_value(property_name)
-            }
-            ComputedValue::Function { name, args } => {
-                self.resolve_function(name, args)
-            }
+            ComputedValue::Revert => self.get_user_agent_value(property_name),
+            ComputedValue::Function { name, args } => self.resolve_function(name, args),
             ComputedValue::List(values) => {
                 let resolved_values: Result<Vec<ComputedValue>> = values
                     .iter()
@@ -191,7 +174,6 @@ impl ComputedStyles {
             
             "font-size" => PercentageBase::FontSize,
             "line-height" => PercentageBase::LineHeight,
-            
             _ => PercentageBase::None,
         }
     }
@@ -201,7 +183,7 @@ impl ComputedStyles {
             PercentageBase::Width => self.context.containing_block_width,
             PercentageBase::Height => self.context.containing_block_height,
             PercentageBase::FontSize => self.context.font_size,
-            PercentageBase::LineHeight => self.context.font_size * 1.2, // Default line-height
+            PercentageBase::LineHeight => self.context.font_size * 1.2,
             PercentageBase::None => {
                 return Err(ComputedStyleError::ValueResolution(
                     "Cannot resolve percentage without base".to_string()
@@ -214,19 +196,9 @@ impl ComputedStyles {
 
     fn resolve_auto_value(&self, property_name: &str) -> Result<ComputedValue> {
         match property_name {
-            "width" => {
-                // Auto width calculation depends on display type and containing block
-                Ok(ComputedValue::Length(self.context.containing_block_width))
-            }
-            "height" => {
-                // Auto height is content-based
-                Ok(ComputedValue::Auto)
-            }
-            "margin-left" | "margin-right" => {
-                // Auto margins center the element
-                Ok(ComputedValue::Length(0.0))
-            }
-            "margin-top" | "margin-bottom" => {
+            "width" => Ok(ComputedValue::Length(self.context.containing_block_width)),
+            "height" => Ok(ComputedValue::Auto),
+            "margin-left" | "margin-right" | "margin-top" | "margin-bottom" => {
                 Ok(ComputedValue::Length(0.0))
             }
             _ => Ok(ComputedValue::Auto),
@@ -251,7 +223,6 @@ impl ComputedStyles {
     }
 
     fn get_user_agent_value(&self, property_name: &str) -> Result<ComputedValue> {
-        // Return user agent default values
         match property_name {
             "display" => Ok(ComputedValue::Keyword("block".to_string())),
             "color" => Ok(ComputedValue::Color(Color::BLACK)),
@@ -275,9 +246,9 @@ impl ComputedStyles {
             "rgba" => self.resolve_rgba_function(args),
             "hsl" => self.resolve_hsl_function(args),
             "hsla" => self.resolve_hsla_function(args),
-            "linear-gradient" => self.resolve_linear_gradient_function(args),
-            "radial-gradient" => self.resolve_radial_gradient_function(args),
-            "url" => Ok(ComputedValue::Function { name: name.to_string(), args: args.to_vec() }),
+            "linear-gradient" | "radial-gradient" | "url" => {
+                Ok(ComputedValue::Function { name: name.to_string(), args: args.to_vec() })
+            }
             _ => Ok(ComputedValue::Function { name: name.to_string(), args: args.to_vec() }),
         }
     }
@@ -287,18 +258,13 @@ impl ComputedStyles {
             return Err(ComputedStyleError::ValueResolution("calc() requires one argument".to_string()));
         }
 
-        // Simple calc resolution - in a real implementation, this would parse the expression
         match &args[0] {
-            ComputedValue::String(expression) => {
-                // Parse and evaluate the calc expression
-                self.evaluate_calc_expression(expression)
-            }
+            ComputedValue::String(expression) => self.evaluate_calc_expression(expression),
             _ => Err(ComputedStyleError::ValueResolution("Invalid calc() argument".to_string())),
         }
     }
 
     fn evaluate_calc_expression(&self, expression: &str) -> Result<ComputedValue> {
-        // Simplified calc evaluation - real implementation would use a proper parser
         if expression.contains('+') {
             let parts: Vec<&str> = expression.split('+').map(|s| s.trim()).collect();
             if parts.len() == 2 {
@@ -369,13 +335,12 @@ impl ComputedStyles {
         
         for arg in args {
             let resolved = self.resolve_computed_value("", arg)?;
-            match resolved {
-                ComputedValue::Length(value) => {
-                    if min_value.is_none() || value < min_value.unwrap() {
-                        min_value = Some(value);
-                    }
+            if let ComputedValue::Length(value) = resolved {
+                if min_value.is_none() || value < min_value.unwrap() {
+                    min_value = Some(value);
                 }
-                _ => return Err(ComputedStyleError::ValueResolution("min() arguments must be lengths".to_string())),
+            } else {
+                return Err(ComputedStyleError::ValueResolution("min() arguments must be lengths".to_string()));
             }
         }
 
@@ -391,13 +356,12 @@ impl ComputedStyles {
         
         for arg in args {
             let resolved = self.resolve_computed_value("", arg)?;
-            match resolved {
-                ComputedValue::Length(value) => {
-                    if max_value.is_none() || value > max_value.unwrap() {
-                        max_value = Some(value);
-                    }
+            if let ComputedValue::Length(value) = resolved {
+                if max_value.is_none() || value > max_value.unwrap() {
+                    max_value = Some(value);
                 }
-                _ => return Err(ComputedStyleError::ValueResolution("max() arguments must be lengths".to_string())),
+            } else {
+                return Err(ComputedStyleError::ValueResolution("max() arguments must be lengths".to_string()));
             }
         }
 
@@ -493,22 +457,6 @@ impl ComputedStyles {
         Ok(ComputedValue::Color(color))
     }
 
-    fn resolve_linear_gradient_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
-        // Linear gradient resolution would be more complex in a real implementation
-        Ok(ComputedValue::Function {
-            name: "linear-gradient".to_string(),
-            args: args.to_vec(),
-        })
-    }
-
-    fn resolve_radial_gradient_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
-        // Radial gradient resolution would be more complex in a real implementation
-        Ok(ComputedValue::Function {
-            name: "radial-gradient".to_string(),
-            args: args.to_vec(),
-        })
-    }
-
     fn resolve_color_component(&self, value: &ComputedValue) -> Result<u8> {
         match value {
             ComputedValue::Number(n) => Ok((*n as u8).min(255)),
@@ -562,7 +510,7 @@ impl ComputedStyles {
         *self.is_dirty.write() = true;
     }
 
-    fn is_inherited_property(property_name: &str) -> bool {
+    pub fn is_inherited_property(property_name: &str) -> bool {
         Self::get_inherited_properties().contains(&property_name.to_string())
     }
 
@@ -708,7 +656,7 @@ impl ComputedStyles {
             ComputedValue::Auto => {
                 match property_name {
                     "width" => Ok(self.context.containing_block_width),
-                    "height" => Ok(0.0), // Content-based
+                    "height" => Ok(0.0),
                     _ => Ok(0.0),
                 }
             }
@@ -720,39 +668,39 @@ impl ComputedStyles {
 
     pub fn clone_with_new_context(&self, context: LayoutContext) -> ComputedStyles {
         ComputedStyles {
-            properties: self.properties.clone(),
-            specificity_map: self.specificity_map.clone(),
-            source_map: self.source_map.clone(),
+            properties: DashMap::new(),
+            specificity_map: DashMap::new(),
+            source_map: DashMap::new(),
             parent_styles: self.parent_styles.clone(),
             context,
-            is_dirty: Arc::new(RwLock::new(true)),
+            is_dirty: RwLock::new(true),
         }
     }
 }
 
 pub struct StyleEngine {
     selector_engine: Arc<SelectorEngine>,
-    style_cache: Arc<DashMap<NodeId, Arc<ComputedStyles>>>,
-    stylesheet_cache: Arc<RwLock<Vec<Arc<CSSRule>>>>,
-    media_queries: Arc<RwLock<Vec<CSSMediaRule>>>,
-    context_stack: Arc<RwLock<Vec<LayoutContext>>>,
+    style_cache: DashMap<NodeId, Arc<ComputedStyles>>,
+    stylesheet_cache: RwLock<Vec<Arc<CSSRule>>>,
+    media_queries: RwLock<Vec<CSSMediaRule>>,
+    context_stack: RwLock<Vec<LayoutContext>>,
 }
 
 impl StyleEngine {
     pub fn new() -> Self {
         Self {
             selector_engine: Arc::new(SelectorEngine::new()),
-            style_cache: Arc::new(DashMap::new()),
-            stylesheet_cache: Arc::new(RwLock::new(Vec::new())),
-            media_queries: Arc::new(RwLock::new(Vec::new())),
-            context_stack: Arc::new(RwLock::new(vec![LayoutContext::default()])),
+            style_cache: DashMap::new(),
+            stylesheet_cache: RwLock::new(Vec::new()),
+            media_queries: RwLock::new(Vec::new()),
+            context_stack: RwLock::new(vec![LayoutContext::default()]),
         }
     }
 
     pub async fn compute_styles(&self, document: &Document) -> Result<()> {
         self.style_cache.clear();
         
-        if let Some(root_id) = *document.root_node.read() {
+        if let Some(root_id) = document.get_root_node() {
             let context = self.get_current_context();
             self.compute_styles_recursive(root_id, None, document, context).await?;
         }
@@ -769,18 +717,37 @@ impl StyleEngine {
     ) -> Result<()> {
         let computed_styles = self.compute_styles_for_node(node_id, parent_styles.as_ref(), document)?;
         
-        if let Some(children) = document.get_children(node_id) {
-            for &child_id in &children {
-                Box::pin(self.compute_styles_recursive(
-                    child_id, 
-                    Some(computed_styles.clone()), 
-                    document, 
-                    context.clone()
-                )).await?;
-            }
+        let children = document.get_children(node_id);
+        for &child_id in &children {
+            Box::pin(self.compute_styles_recursive(
+                child_id, 
+                Some(computed_styles.clone()), 
+                document, 
+                context.clone()
+            )).await?;
         }
         
         Ok(())
+    }
+
+    fn compute_styles_for_node(
+        &self,
+        node_id: NodeId,
+        parent_styles: Option<&Arc<ComputedStyles>>,
+        document: &Document,
+    ) -> Result<Arc<ComputedStyles>> {
+        let context = self.get_current_context();
+        
+        let computed_styles = if let Some(parent) = parent_styles {
+            Arc::new(ComputedStyles::with_parent(context, parent.clone()))
+        } else {
+            Arc::new(ComputedStyles::new(context))
+        };
+
+        futures::executor::block_on(self.apply_matching_rules(node_id, &computed_styles, document))?;
+        
+        self.style_cache.insert(node_id, computed_styles.clone());
+        Ok(computed_styles)
     }
 
     async fn apply_matching_rules(
@@ -851,7 +818,6 @@ impl StyleEngine {
     }
 
     fn evaluate_media_query(&self, _media_query: &crate::core::css::parser::MediaQuery) -> bool {
-        // Simplified media query evaluation
         true
     }
 

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::{Mutex, RwLock};
 use ash::{Device, Instance, Entry};
 use ash::vk;

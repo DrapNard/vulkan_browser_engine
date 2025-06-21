@@ -10,6 +10,7 @@ use storage::StorageManager;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::log;
 
 pub struct PwaRuntime {
     cache_manager: Arc<RwLock<CacheManager>>,

@@ -8,6 +8,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, RwLock};
+use tracing::log;
 
 pub struct SandboxedProcess {
     pub id: u32,

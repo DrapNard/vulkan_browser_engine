@@ -1,9 +1,9 @@
-use super::V8Error;
 use crate::core::network::FetchEngine;
 use crate::pwa::ServiceWorkerRuntime;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use v8::{FunctionCallbackArguments, HandleScope, ReturnValue};
+use v8::{FunctionCallbackArguments, ReturnValue};
+use tracing::log;
 
 pub struct WebApiBindings {
     fetch_engine: Arc<FetchEngine>,
