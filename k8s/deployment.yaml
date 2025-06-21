@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vulkan-renderer
+  labels:
+    app: vulkan-renderer
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vulkan-renderer
+  template:
+    metadata:
+      labels:
+        app: vulkan-renderer
+    spec:
+      containers:
+      - name: vulkan-renderer
+        image: vulkan-renderer:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: VK_INSTANCE_LAYERS
+          value: ""
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5

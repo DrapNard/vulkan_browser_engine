@@ -1,0 +1,70 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct DrawCommand {
+    uint vertex_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
+};
+
+struct BoundingBox {
+    vec3 min;
+    vec3 max;
+};
+
+layout(set = 0, binding = 0) readonly buffer InputBuffer {
+    BoundingBox bounding_boxes[];
+};
+
+layout(set = 0, binding = 1) writeonly buffer OutputBuffer {
+    DrawCommand draw_commands[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer CounterBuffer {
+    uint visible_count;
+};
+
+layout(push_constant) uniform FrustumData {
+    vec4 frustum_planes[6];
+    mat4 view_proj;
+} frustum;
+
+bool is_visible(BoundingBox bbox) {
+    vec3 center = (bbox.min + bbox.max) * 0.5;
+    vec3 extent = (bbox.max - bbox.min) * 0.5;
+    
+    for (int i = 0; i < 6; i++) {
+        vec3 plane_normal = frustum.frustum_planes[i].xyz;
+        float plane_distance = frustum.frustum_planes[i].w;
+        
+        float projected_radius = dot(extent, abs(plane_normal));
+        float distance_to_plane = dot(center, plane_normal) + plane_distance;
+        
+        if (distance_to_plane < -projected_radius) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    
+    if (index >= bounding_boxes.length()) {
+        return;
+    }
+    
+    if (is_visible(bounding_boxes[index])) {
+        uint output_index = atomicAdd(visible_count, 1);
+        
+        draw_commands[output_index] = DrawCommand(
+            6,
+            1,
+            index * 6,
+            0
+        );
+    }
+}

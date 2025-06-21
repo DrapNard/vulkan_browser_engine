@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  vulkan-renderer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+      - VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+    volumes:
+      - ./data:/data
+    networks:
+      - renderer-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - renderer-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - renderer-network
+
+networks:
+  renderer-network:
+    driver: bridge

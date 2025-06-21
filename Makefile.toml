@@ -1,0 +1,42 @@
+[config]
+default_to_workspace = false
+
+[env]
+CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
+
+[tasks.install-deps]
+description = "Install system dependencies"
+script = "./install.sh"
+
+[tasks.build-shaders]
+description = "Compile Vulkan shaders"
+script = "./scripts/build-shaders.sh"
+
+[tasks.test-all]
+description = "Run all tests"
+command = "cargo"
+args = ["test", "--all-features"]
+
+[tasks.bench]
+description = "Run benchmarks"
+command = "cargo"
+args = ["bench"]
+
+[tasks.lint]
+description = "Run clippy and format check"
+dependencies = ["clippy", "fmt-check"]
+
+[tasks.clippy]
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+[tasks.fmt-check]
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.security-audit]
+command = "cargo"
+args = ["audit"]
+
+[tasks.ci]
+dependencies = ["lint", "test-all", "security-audit"]

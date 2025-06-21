@@ -1,0 +1,44 @@
+name: Extended Tests
+
+on:
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install Vulkan SDK
+      run: |
+        sudo apt update
+        sudo apt install -y vulkan-tools libvulkan-dev
+    
+    - name: Run benchmarks
+      run: cargo bench --all-features
+    
+    - name: Store benchmark results
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        tool: 'cargo'
+        output-file-path: target/criterion/benchmark.json
+
+  memory-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install Valgrind
+      run: sudo apt install -y valgrind
+    
+    - name: Memory leak test
+      run: |
+        cargo build --features=debug-heap
+        valgrind --tool=memcheck --leak-check=full ./target/debug/vulkan-renderer
