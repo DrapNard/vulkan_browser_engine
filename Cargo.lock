@@ -4621,6 +4621,7 @@ dependencies = [
  "rayon",
  "reqwest",
  "resvg",
+ "ring 0.17.14",
  "rusb",
  "rusttype",
  "rustybuzz",
