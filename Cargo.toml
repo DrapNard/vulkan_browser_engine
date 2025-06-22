@@ -57,7 +57,7 @@ cranelift = { version = "0.105.4", optional = true }
 cranelift-codegen = { version = "0.105.4", optional = true }
 cranelift-frontend = { version = "0.105.4", optional = true }
 cranelift-jit = { version = "0.105.4", optional = true }
-cranelift-module = { version = "0.105.4", optional = true }
+cranelift-module = { version = "0.121.0", optional = true }
 target-lexicon = "0.12.13"
 
 v8 = "0.89.0"
