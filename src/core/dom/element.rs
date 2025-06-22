@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use parking_lot::RwLock;
 use thiserror::Error;
 
-use super::{Node, NodeType, document::NodeId};
+use crate::core::dom::node::{Node, NodeType};
+use crate::core::dom::document::NodeId;
 use crate::core::css::CSSStyleDeclaration;
 
 #[derive(Error, Debug)]
@@ -46,7 +47,7 @@ impl DOMRect {
         }
     }
 
-    pub fn from_layout_data(layout: &super::node::LayoutData) -> Self {
+    pub fn from_layout_data(layout: &crate::core::dom::node::LayoutData) -> Self {
         Self::new(
             layout.x as f64,
             layout.y as f64,
@@ -58,34 +59,34 @@ impl DOMRect {
 
 #[derive(Debug, Clone)]
 pub struct ElementProperties {
-    inner_html: String,
-    outer_html: String,
-    text_content: String,
-    inner_text: String,
-    client_width: f64,
-    client_height: f64,
-    client_top: f64,
-    client_left: f64,
-    scroll_width: f64,
-    scroll_height: f64,
-    scroll_top: f64,
-    scroll_left: f64,
-    offset_width: f64,
-    offset_height: f64,
-    offset_top: f64,
-    offset_left: f64,
-    tab_index: i32,
-    hidden: bool,
-    content_editable: String,
-    is_content_editable: bool,
-    spellcheck: bool,
-    translate: bool,
-    dir: String,
-    lang: String,
-    title: String,
-    access_key: String,
-    draggable: bool,
-    dropzone: String,
+    pub inner_html: String,
+    pub outer_html: String,
+    pub text_content: String,
+    pub inner_text: String,
+    pub client_width: f64,
+    pub client_height: f64,
+    pub client_top: f64,
+    pub client_left: f64,
+    pub scroll_width: f64,
+    pub scroll_height: f64,
+    pub scroll_top: f64,
+    pub scroll_left: f64,
+    pub offset_width: f64,
+    pub offset_height: f64,
+    pub offset_top: f64,
+    pub offset_left: f64,
+    pub tab_index: i32,
+    pub hidden: bool,
+    pub content_editable: String,
+    pub is_content_editable: bool,
+    pub spellcheck: bool,
+    pub translate: bool,
+    pub dir: String,
+    pub lang: String,
+    pub title: String,
+    pub access_key: String,
+    pub draggable: bool,
+    pub dropzone: String,
 }
 
 impl Default for ElementProperties {
@@ -123,17 +124,47 @@ impl Default for ElementProperties {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ElementInternals {
-    form_associated: bool,
-    form_disabled: bool,
-    form_reset_callback: Option<Arc<dyn Fn() + Send + Sync>>,
-    form_state_restore_callback: Option<Arc<dyn Fn() + Send + Sync>>,
-    validation_message: String,
-    validity_state: ValidityState,
-    will_validate: bool,
-    labels: Vec<NodeId>,
-    form: Option<NodeId>,
+    pub form_associated: bool,
+    pub form_disabled: bool,
+    pub form_reset_callback: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub form_state_restore_callback: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub validation_message: String,
+    pub validity_state: ValidityState,
+    pub will_validate: bool,
+    pub labels: Vec<NodeId>,
+    pub form: Option<NodeId>,
+}
+
+impl Default for ElementInternals {
+    fn default() -> Self {
+        Self {
+            form_associated: false,
+            form_disabled: false,
+            form_reset_callback: None,
+            form_state_restore_callback: None,
+            validation_message: String::new(),
+            validity_state: ValidityState::default(),
+            will_validate: false,
+            labels: Vec::new(),
+            form: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ElementInternals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElementInternals")
+            .field("form_associated", &self.form_associated)
+            .field("form_disabled", &self.form_disabled)
+            .field("validation_message", &self.validation_message)
+            .field("validity_state", &self.validity_state)
+            .field("will_validate", &self.will_validate)
+            .field("labels", &self.labels)
+            .field("form", &self.form)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -169,22 +200,6 @@ impl Default for ValidityState {
     }
 }
 
-impl Default for ElementInternals {
-    fn default() -> Self {
-        Self {
-            form_associated: false,
-            form_disabled: false,
-            form_reset_callback: None,
-            form_state_restore_callback: None,
-            validation_message: String::new(),
-            validity_state: ValidityState::default(),
-            will_validate: false,
-            labels: Vec::new(),
-            form: None,
-        }
-    }
-}
-
 pub struct Element {
     node: Node,
     properties: Arc<RwLock<ElementProperties>>,
@@ -198,12 +213,12 @@ pub struct Element {
 
 #[derive(Debug, Clone)]
 pub struct AnimationProperties {
-    animations: Vec<Animation>,
-    transitions: Vec<Transition>,
-    transform: String,
-    opacity: f64,
-    filter: String,
-    backdrop_filter: String,
+    pub animations: Vec<Animation>,
+    pub transitions: Vec<Transition>,
+    pub transform: String,
+    pub opacity: f64,
+    pub filter: String,
+    pub backdrop_filter: String,
 }
 
 #[derive(Debug, Clone)]
@@ -257,9 +272,7 @@ impl Element {
         if node.get_node_type() != NodeType::Element {
             return Err(ElementError::InvalidOperation("Node is not an element".to_string()));
         }
-
         let classes = node.get_classes();
-        
         Ok(Self {
             node,
             properties: Arc::new(RwLock::new(ElementProperties::default())),
@@ -295,7 +308,7 @@ impl Element {
     pub fn set_class_name(&mut self, class_name: &str) {
         self.node.set_attribute("class", class_name);
         let mut class_list = self.class_list.write();
-        *class_list = class_name.split_whitespace().map(|s| s.to_string()).collect();
+        *class_list = class_name.split_whitespace().map(str::to_string).collect();
     }
 
     pub fn get_class_list(&self) -> Vec<String> {
@@ -319,7 +332,6 @@ impl Element {
     pub fn toggle_class(&mut self, class_name: &str) -> bool {
         let result = self.node.toggle_class(class_name);
         let mut class_list = self.class_list.write();
-        
         if result {
             if !class_list.contains(&class_name.to_string()) {
                 class_list.push(class_name.to_string());
@@ -327,7 +339,6 @@ impl Element {
         } else {
             class_list.retain(|class| class != class_name);
         }
-        
         result
     }
 
@@ -340,7 +351,7 @@ impl Element {
     }
 
     pub fn set_style_property(&self, property: &str, value: &str) -> Result<()> {
-        let mut style = self.style.write();
+        let style = self.style.write();
         style.set_property(property, value, "")
             .map_err(|e| ElementError::InvalidPropertyValue(e.to_string()))?;
         Ok(())
@@ -352,7 +363,7 @@ impl Element {
     }
 
     pub fn remove_style_property(&self, property: &str) -> Option<String> {
-        let mut style = self.style.write();
+        let style = self.style.write();
         style.remove_property(property).ok()
     }
 
@@ -452,7 +463,6 @@ impl Element {
     pub fn scroll_into_view(&self, align_to_top: bool) {
         let layout = self.node.get_layout_data();
         let layout_data = layout.read();
-        
         if align_to_top {
             self.set_scroll_top(layout_data.y as f64);
         } else {
@@ -463,7 +473,6 @@ impl Element {
     pub fn scroll_by(&self, x: f64, y: f64) {
         let current_left = self.get_scroll_left();
         let current_top = self.get_scroll_top();
-        
         self.set_scroll_left(current_left + x);
         self.set_scroll_top(current_top + y);
     }
@@ -477,20 +486,16 @@ impl Element {
         self.properties.read().tab_index
     }
 
-    pub fn set_tab_index(&self, index: i32) {
+    pub fn set_tab_index(&mut self, index: i32) {
         self.properties.write().tab_index = index;
         self.node.set_attribute("tabindex", &index.to_string());
     }
 
-    pub fn focus(&self) {
-        
-    }
+    pub fn focus(&self) {}
 
-    pub fn blur(&self) {
-        
-    }
+    pub fn blur(&self) {}
 
-    pub fn click(&self) {
+    pub fn click(&mut self) {
         self.node.dispatch_event("click");
     }
 
@@ -498,7 +503,7 @@ impl Element {
         self.properties.read().hidden
     }
 
-    pub fn set_hidden(&self, hidden: bool) {
+    pub fn set_hidden(&mut self, hidden: bool) {
         self.properties.write().hidden = hidden;
         if hidden {
             self.node.set_attribute("hidden", "");
@@ -511,7 +516,7 @@ impl Element {
         self.properties.read().draggable
     }
 
-    pub fn set_draggable(&self, draggable: bool) {
+    pub fn set_draggable(&mut self, draggable: bool) {
         self.properties.write().draggable = draggable;
         self.node.set_attribute("draggable", &draggable.to_string());
     }
@@ -520,9 +525,10 @@ impl Element {
         self.properties.read().content_editable.clone()
     }
 
-    pub fn set_content_editable(&self, editable: &str) {
-        self.properties.write().content_editable = editable.to_string();
-        self.properties.write().is_content_editable = editable == "true";
+    pub fn set_content_editable(&mut self, editable: &str) {
+        let mut props = self.properties.write();
+        props.content_editable = editable.to_string();
+        props.is_content_editable = editable == "true";
         self.node.set_attribute("contenteditable", editable);
     }
 
@@ -534,7 +540,7 @@ impl Element {
         self.properties.read().spellcheck
     }
 
-    pub fn set_spellcheck(&self, spellcheck: bool) {
+    pub fn set_spellcheck(&mut self, spellcheck: bool) {
         self.properties.write().spellcheck = spellcheck;
         self.node.set_attribute("spellcheck", &spellcheck.to_string());
     }
@@ -543,7 +549,7 @@ impl Element {
         self.properties.read().title.clone()
     }
 
-    pub fn set_title(&self, title: &str) {
+    pub fn set_title(&mut self, title: &str) {
         self.properties.write().title = title.to_string();
         self.node.set_attribute("title", title);
     }
@@ -552,7 +558,7 @@ impl Element {
         self.properties.read().lang.clone()
     }
 
-    pub fn set_lang(&self, lang: &str) {
+    pub fn set_lang(&mut self, lang: &str) {
         self.properties.write().lang = lang.to_string();
         self.node.set_attribute("lang", lang);
     }
@@ -561,7 +567,7 @@ impl Element {
         self.properties.read().dir.clone()
     }
 
-    pub fn set_dir(&self, dir: &str) {
+    pub fn set_dir(&mut self, dir: &str) {
         self.properties.write().dir = dir.to_string();
         self.node.set_attribute("dir", dir);
     }
@@ -570,7 +576,7 @@ impl Element {
         self.properties.read().access_key.clone()
     }
 
-    pub fn set_access_key(&self, key: &str) {
+    pub fn set_access_key(&mut self, key: &str) {
         self.properties.write().access_key = key.to_string();
         self.node.set_attribute("accesskey", key);
     }
@@ -579,7 +585,7 @@ impl Element {
         self.dataset.read().clone()
     }
 
-    pub fn set_dataset_value(&self, key: &str, value: &str) {
+    pub fn set_dataset_value(&mut self, key: &str, value: &str) {
         self.dataset.write().insert(key.to_string(), value.to_string());
         let attr_name = format!("data-{}", key.replace('_', "-"));
         self.node.set_attribute(&attr_name, value);
@@ -589,75 +595,56 @@ impl Element {
         self.dataset.read().get(key).cloned()
     }
 
-    pub fn remove_dataset_value(&self, key: &str) -> Option<String> {
+    pub fn remove_dataset_value(&mut self, key: &str) -> Option<String> {
         let result = self.dataset.write().remove(key);
         let attr_name = format!("data-{}", key.replace('_', "-"));
         self.node.remove_attribute(&attr_name);
         result
     }
 
-    pub fn insert_adjacent_html(&mut self, position: &str, html: &str) -> Result<()> {
+    pub fn insert_adjacent_html(&mut self, position: &str, _html: &str) -> Result<()> {
         match position {
-            "beforebegin" => {
-                
-            },
-            "afterbegin" => {
-                
-            },
-            "beforeend" => {
-                
-            },
-            "afterend" => {
-                
-            },
+            "beforebegin" => {},
+            "afterbegin" => {},
+            "beforeend" => {},
+            "afterend" => {},
             _ => return Err(ElementError::InvalidOperation(format!("Invalid position: {}", position))),
         }
         Ok(())
     }
 
-    pub fn insert_adjacent_text(&mut self, position: &str, text: &str) -> Result<()> {
+    pub fn insert_adjacent_text(&mut self, position: &str, _text: &str) -> Result<()> {
         match position {
-            "beforebegin" => {
-                
-            },
-            "afterbegin" => {
-                
-            },
-            "beforeend" => {
-                
-            },
-            "afterend" => {
-                
-            },
+            "beforebegin" => {},
+            "afterbegin" => {},
+            "beforeend" => {},
+            "afterend" => {},
             _ => return Err(ElementError::InvalidOperation(format!("Invalid position: {}", position))),
         }
         Ok(())
     }
 
-    pub fn matches(&self, selector: &str) -> Result<bool> {
+    pub fn matches(&self, _selector: &str) -> Result<bool> {
         Ok(false)
     }
 
-    pub fn closest(&self, selector: &str) -> Result<Option<NodeId>> {
+    pub fn closest(&self, _selector: &str) -> Result<Option<NodeId>> {
         Ok(None)
     }
 
-    pub fn animate(&self, keyframes: Vec<HashMap<String, String>>, options: AnimationOptions) -> AnimationId {
+    pub fn animate(&self, _keyframes: Vec<HashMap<String, String>>, options: AnimationOptions) -> AnimationId {
         let mut animations = self.animation_properties.write();
-        
         let animation = Animation {
             name: format!("animation_{}", fastrand::u64(..)),
             duration: options.duration,
-            timing_function: options.easing,
+            timing_function: options.easing.clone(),
             delay: options.delay,
             iteration_count: options.iterations,
             direction: "normal".to_string(),
             fill_mode: options.fill.clone(),
             play_state: "running".to_string(),
         };
-
         animations.animations.push(animation.clone());
-        
         AnimationId(animation.name)
     }
 
@@ -671,11 +658,11 @@ impl Element {
         style.get_property(property).cloned()
     }
 
-    pub fn invalidate_style(&self) {
+    pub fn invalidate_style(&mut self) {
         self.node.invalidate_style();
     }
 
-    pub fn invalidate_layout(&self) {
+    pub fn invalidate_layout(&mut self) {
         self.node.invalidate_layout();
     }
 
@@ -683,7 +670,7 @@ impl Element {
         self.internals.clone()
     }
 
-    pub fn attach_shadow(&mut self, options: ShadowRootInit) -> Result<NodeId> {
+    pub fn attach_shadow(&mut self) -> Result<NodeId> {
         let shadow_root_id = NodeId::new();
         self.node.set_shadow_root(Some(shadow_root_id));
         Ok(shadow_root_id)
@@ -714,15 +701,12 @@ impl Element {
         size += std::mem::size_of::<ElementProperties>();
         size += self.dataset.read().capacity() * std::mem::size_of::<(String, String)>();
         size += self.class_list.read().capacity() * std::mem::size_of::<String>();
-        
         for (key, value) in self.dataset.read().iter() {
             size += key.capacity() + value.capacity();
         }
-        
         for class in self.class_list.read().iter() {
             size += class.capacity();
         }
-        
         size
     }
 }

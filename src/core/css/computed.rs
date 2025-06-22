@@ -7,6 +7,7 @@ use thiserror::Error;
 use super::{CSSValue, ComputedValue, Color, LayoutContext};
 use super::parser::{CSSRule, CSSStyleRule, CSSMediaRule};
 use super::selector::SelectorEngine;
+use crate::core::css::computed;
 use crate::core::dom::{Document, NodeId};
 
 #[derive(Error, Debug)]
@@ -72,7 +73,6 @@ impl ComputedStyles {
             context,
             is_dirty: RwLock::new(true),
         };
-
         styles.initialize_defaults();
         styles
     }
@@ -86,35 +86,33 @@ impl ComputedStyles {
             context,
             is_dirty: RwLock::new(true),
         };
-
         styles.initialize_defaults();
         styles.inherit_from_parent();
         styles
     }
 
     fn initialize_defaults(&mut self) {
-        for property in Self::get_default_properties() {
-            self.properties.insert(property.name.clone(), property.initial_value);
+        for prop in Self::get_default_properties() {
+            self.properties.insert(prop.name.clone(), prop.initial_value);
         }
     }
 
     fn inherit_from_parent(&self) {
-        if let Some(ref parent) = self.parent_styles {
-            for property_name in Self::get_inherited_properties() {
-                if let Some(parent_value) = parent.properties.get(&property_name) {
-                    self.properties.insert(property_name, parent_value.clone());
+        if let Some(ref p) = self.parent_styles {
+            for name in Self::get_inherited_properties() {
+                if let Some(v) = p.properties.get(&name) {
+                    self.properties.insert(name.clone(), v.clone());
                 }
             }
         }
     }
 
     pub fn set_property(&self, name: &str, value: ComputedValue, specificity: u32, source: &str) {
-        if let Some(current_specificity) = self.specificity_map.get(name) {
-            if specificity < *current_specificity {
+        if let Some(current) = self.specificity_map.get(name) {
+            if specificity < *current {
                 return;
             }
         }
-
         self.properties.insert(name.to_string(), value);
         self.specificity_map.insert(name.to_string(), specificity);
         self.source_map.insert(name.to_string(), source.to_string());
@@ -122,12 +120,12 @@ impl ComputedStyles {
     }
 
     pub fn get_property(&self, name: &str) -> Option<ComputedValue> {
-        self.properties.get(name).map(|entry| entry.clone())
+        self.properties.get(name).map(|e| e.clone())
     }
 
     pub fn get_computed_value(&self, name: &str) -> Result<ComputedValue> {
-        if let Some(value) = self.get_property(name) {
-            self.resolve_computed_value(name, &value)
+        if let Some(v) = self.get_property(name) {
+            self.resolve_computed_value(name, &v)
         } else {
             Err(ComputedStyleError::PropertyComputation(format!("Property not found: {}", name)))
         }
@@ -135,10 +133,10 @@ impl ComputedStyles {
 
     fn resolve_computed_value(&self, property_name: &str, value: &ComputedValue) -> Result<ComputedValue> {
         match value {
-            ComputedValue::Length(length) => Ok(ComputedValue::Length(*length)),
-            ComputedValue::Percentage(percentage) => {
+            ComputedValue::Length(l) => Ok(ComputedValue::Length(*l)),
+            ComputedValue::Percentage(p) => {
                 let base = self.get_percentage_base(property_name);
-                let resolved = self.resolve_percentage(*percentage, base)?;
+                let resolved = self.resolve_percentage(*p, base)?;
                 Ok(ComputedValue::Length(resolved))
             }
             ComputedValue::Auto => self.resolve_auto_value(property_name),
@@ -153,12 +151,12 @@ impl ComputedStyles {
             }
             ComputedValue::Revert => self.get_user_agent_value(property_name),
             ComputedValue::Function { name, args } => self.resolve_function(name, args),
-            ComputedValue::List(values) => {
-                let resolved_values: Result<Vec<ComputedValue>> = values
-                    .iter()
-                    .map(|v| self.resolve_computed_value(property_name, v))
-                    .collect();
-                Ok(ComputedValue::List(resolved_values?))
+            ComputedValue::List(vals) => {
+                let mut out = Vec::new();
+                for v in vals {
+                    out.push(self.resolve_computed_value(property_name, v)?);
+                }
+                Ok(ComputedValue::List(out))
             }
             _ => Ok(value.clone()),
         }
@@ -166,12 +164,12 @@ impl ComputedStyles {
 
     fn get_percentage_base(&self, property_name: &str) -> PercentageBase {
         match property_name {
-            "width" | "min-width" | "max-width" | "left" | "right" | "margin-left" | "margin-right" | 
-            "padding-left" | "padding-right" | "border-left-width" | "border-right-width" => PercentageBase::Width,
-            
-            "height" | "min-height" | "max-height" | "top" | "bottom" | "margin-top" | "margin-bottom" |
-            "padding-top" | "padding-bottom" | "border-top-width" | "border-bottom-width" => PercentageBase::Height,
-            
+            "width" | "min-width" | "max-width" | "left" | "right"
+            | "margin-left" | "margin-right" | "padding-left" | "padding-right"
+            | "border-left-width" | "border-right-width" => PercentageBase::Width,
+            "height" | "min-height" | "max-height" | "top" | "bottom"
+            | "margin-top" | "margin-bottom" | "padding-top" | "padding-bottom"
+            | "border-top-width" | "border-bottom-width" => PercentageBase::Height,
             "font-size" => PercentageBase::FontSize,
             "line-height" => PercentageBase::LineHeight,
             _ => PercentageBase::None,
@@ -185,12 +183,9 @@ impl ComputedStyles {
             PercentageBase::FontSize => self.context.font_size,
             PercentageBase::LineHeight => self.context.font_size * 1.2,
             PercentageBase::None => {
-                return Err(ComputedStyleError::ValueResolution(
-                    "Cannot resolve percentage without base".to_string()
-                ));
+                return Err(ComputedStyleError::ValueResolution("Cannot resolve percentage without base".into()));
             }
         };
-
         Ok(base_value * percentage / 100.0)
     }
 
@@ -198,20 +193,15 @@ impl ComputedStyles {
         match property_name {
             "width" => Ok(ComputedValue::Length(self.context.containing_block_width)),
             "height" => Ok(ComputedValue::Auto),
-            "margin-left" | "margin-right" | "margin-top" | "margin-bottom" => {
-                Ok(ComputedValue::Length(0.0))
-            }
+            "margin-left" | "margin-right" | "margin-top" | "margin-bottom" => Ok(ComputedValue::Length(0.0)),
             _ => Ok(ComputedValue::Auto),
         }
     }
 
     fn get_initial_value(&self, property_name: &str) -> Result<ComputedValue> {
-        let property = Self::get_property_definition(property_name)
-            .ok_or_else(|| ComputedStyleError::PropertyComputation(
-                format!("Unknown property: {}", property_name)
-            ))?;
-        
-        Ok(property.initial_value.clone())
+        let def = Self::get_property_definition(property_name)
+            .ok_or_else(|| ComputedStyleError::PropertyComputation(format!("Unknown property: {}", property_name)))?;
+        Ok(def.initial_value.clone())
     }
 
     fn get_inherited_value(&self, property_name: &str) -> Result<ComputedValue> {
@@ -224,10 +214,10 @@ impl ComputedStyles {
 
     fn get_user_agent_value(&self, property_name: &str) -> Result<ComputedValue> {
         match property_name {
-            "display" => Ok(ComputedValue::Keyword("block".to_string())),
+            "display" => Ok(ComputedValue::Keyword("block".into())),
             "color" => Ok(ComputedValue::Color(Color::BLACK)),
             "background-color" => Ok(ComputedValue::Color(Color::TRANSPARENT)),
-            "font-family" => Ok(ComputedValue::String("serif".to_string())),
+            "font-family" => Ok(ComputedValue::String("serif".into())),
             "font-size" => Ok(ComputedValue::Length(16.0)),
             "font-weight" => Ok(ComputedValue::Number(400.0)),
             "line-height" => Ok(ComputedValue::Number(1.2)),
@@ -246,64 +236,57 @@ impl ComputedStyles {
             "rgba" => self.resolve_rgba_function(args),
             "hsl" => self.resolve_hsl_function(args),
             "hsla" => self.resolve_hsla_function(args),
-            "linear-gradient" | "radial-gradient" | "url" => {
-                Ok(ComputedValue::Function { name: name.to_string(), args: args.to_vec() })
-            }
             _ => Ok(ComputedValue::Function { name: name.to_string(), args: args.to_vec() }),
         }
     }
 
     fn resolve_calc_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.len() != 1 {
-            return Err(ComputedStyleError::ValueResolution("calc() requires one argument".to_string()));
+            return Err(ComputedStyleError::ValueResolution("calc() requires one argument".into()));
         }
-
-        match &args[0] {
-            ComputedValue::String(expression) => self.evaluate_calc_expression(expression),
-            _ => Err(ComputedStyleError::ValueResolution("Invalid calc() argument".to_string())),
+        if let ComputedValue::String(expr) = &args[0] {
+            self.evaluate_calc_expression(expr)
+        } else {
+            Err(ComputedStyleError::ValueResolution("Invalid calc() argument".into()))
         }
     }
 
     fn evaluate_calc_expression(&self, expression: &str) -> Result<ComputedValue> {
-        if expression.contains('+') {
-            let parts: Vec<&str> = expression.split('+').map(|s| s.trim()).collect();
-            if parts.len() == 2 {
-                let left = self.parse_calc_value(parts[0])?;
-                let right = self.parse_calc_value(parts[1])?;
-                return self.add_calc_values(&left, &right);
-            }
+        if let Some(pos) = expression.find('+') {
+            let (l, r) = expression.split_at(pos);
+            let left = self.parse_calc_value(l.trim())?;
+            let right = self.parse_calc_value(r[1..].trim())?;
+            return self.add_calc_values(&left, &right);
         }
-
-        if expression.contains('-') {
-            let parts: Vec<&str> = expression.split('-').map(|s| s.trim()).collect();
-            if parts.len() == 2 {
-                let left = self.parse_calc_value(parts[0])?;
-                let right = self.parse_calc_value(parts[1])?;
-                return self.subtract_calc_values(&left, &right);
-            }
+        if let Some(pos) = expression.find('-') {
+            let (l, r) = expression.split_at(pos);
+            let left = self.parse_calc_value(l.trim())?;
+            let right = self.parse_calc_value(r[1..].trim())?;
+            return self.subtract_calc_values(&left, &right);
         }
-
-        self.parse_calc_value(expression)
+        self.parse_calc_value(expression.trim())
     }
 
     fn parse_calc_value(&self, value: &str) -> Result<ComputedValue> {
-        let value = value.trim();
-        
         if value.ends_with("px") {
-            let num: f32 = value.trim_end_matches("px").parse()
-                .map_err(|_| ComputedStyleError::ValueResolution("Invalid number in calc()".to_string()))?;
+            let num: f32 = value[..value.len() - 2]
+                .parse()
+                .map_err(|_| ComputedStyleError::ValueResolution("Invalid number in calc()".into()))?;
             Ok(ComputedValue::Length(num))
-        } else if value.ends_with("%") {
-            let num: f32 = value.trim_end_matches("%").parse()
-                .map_err(|_| ComputedStyleError::ValueResolution("Invalid percentage in calc()".to_string()))?;
+        } else if value.ends_with('%') {
+            let num: f32 = value[..value.len() - 1]
+                .parse()
+                .map_err(|_| ComputedStyleError::ValueResolution("Invalid percentage in calc()".into()))?;
             Ok(ComputedValue::Percentage(num))
         } else if value.ends_with("em") {
-            let num: f32 = value.trim_end_matches("em").parse()
-                .map_err(|_| ComputedStyleError::ValueResolution("Invalid em value in calc()".to_string()))?;
+            let num: f32 = value[..value.len() - 2]
+                .parse()
+                .map_err(|_| ComputedStyleError::ValueResolution("Invalid em in calc()".into()))?;
             Ok(ComputedValue::Length(num * self.context.font_size))
         } else {
-            let num: f32 = value.parse()
-                .map_err(|_| ComputedStyleError::ValueResolution("Invalid number in calc()".to_string()))?;
+            let num: f32 = value
+                .parse()
+                .map_err(|_| ComputedStyleError::ValueResolution("Invalid number in calc()".into()))?;
             Ok(ComputedValue::Number(num))
         }
     }
@@ -313,7 +296,7 @@ impl ComputedStyles {
             (ComputedValue::Length(a), ComputedValue::Length(b)) => Ok(ComputedValue::Length(a + b)),
             (ComputedValue::Number(a), ComputedValue::Number(b)) => Ok(ComputedValue::Number(a + b)),
             (ComputedValue::Percentage(a), ComputedValue::Percentage(b)) => Ok(ComputedValue::Percentage(a + b)),
-            _ => Err(ComputedStyleError::ValueResolution("Cannot add incompatible types in calc()".to_string())),
+            _ => Err(ComputedStyleError::ValueResolution("Incompatible types in calc()".into())),
         }
     }
 
@@ -322,180 +305,150 @@ impl ComputedStyles {
             (ComputedValue::Length(a), ComputedValue::Length(b)) => Ok(ComputedValue::Length(a - b)),
             (ComputedValue::Number(a), ComputedValue::Number(b)) => Ok(ComputedValue::Number(a - b)),
             (ComputedValue::Percentage(a), ComputedValue::Percentage(b)) => Ok(ComputedValue::Percentage(a - b)),
-            _ => Err(ComputedStyleError::ValueResolution("Cannot subtract incompatible types in calc()".to_string())),
+            _ => Err(ComputedStyleError::ValueResolution("Incompatible types in calc()".into())),
         }
     }
 
     fn resolve_min_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.is_empty() {
-            return Err(ComputedStyleError::ValueResolution("min() requires at least one argument".to_string()));
+            return Err(ComputedStyleError::ValueResolution("min() requires ≥1 args".into()));
         }
-
-        let mut min_value = None;
-        
+        let mut min_val: Option<f32> = None;
         for arg in args {
-            let resolved = self.resolve_computed_value("", arg)?;
-            if let ComputedValue::Length(value) = resolved {
-                if min_value.is_none() || value < min_value.unwrap() {
-                    min_value = Some(value);
-                }
+            let cv = self.resolve_computed_value("", arg)?;
+            if let ComputedValue::Length(v) = cv {
+                min_val = Some(min_val.map_or(v, |m| m.min(v)));
             } else {
-                return Err(ComputedStyleError::ValueResolution("min() arguments must be lengths".to_string()));
+                return Err(ComputedStyleError::ValueResolution("min() args must be lengths".into()));
             }
         }
-
-        Ok(ComputedValue::Length(min_value.unwrap()))
+        Ok(ComputedValue::Length(min_val.unwrap()))
     }
 
     fn resolve_max_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.is_empty() {
-            return Err(ComputedStyleError::ValueResolution("max() requires at least one argument".to_string()));
+            return Err(ComputedStyleError::ValueResolution("max() requires ≥1 args".into()));
         }
-
-        let mut max_value = None;
-        
+        let mut max_val: Option<f32> = None;
         for arg in args {
-            let resolved = self.resolve_computed_value("", arg)?;
-            if let ComputedValue::Length(value) = resolved {
-                if max_value.is_none() || value > max_value.unwrap() {
-                    max_value = Some(value);
-                }
+            let cv = self.resolve_computed_value("", arg)?;
+            if let ComputedValue::Length(v) = cv {
+                max_val = Some(max_val.map_or(v, |m| m.max(v)));
             } else {
-                return Err(ComputedStyleError::ValueResolution("max() arguments must be lengths".to_string()));
+                return Err(ComputedStyleError::ValueResolution("max() args must be lengths".into()));
             }
         }
-
-        Ok(ComputedValue::Length(max_value.unwrap()))
+        Ok(ComputedValue::Length(max_val.unwrap()))
     }
 
     fn resolve_clamp_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.len() != 3 {
-            return Err(ComputedStyleError::ValueResolution("clamp() requires exactly 3 arguments".to_string()));
+            return Err(ComputedStyleError::ValueResolution("clamp() requires 3 args".into()));
         }
-
         let min = self.resolve_computed_value("", &args[0])?;
-        let preferred = self.resolve_computed_value("", &args[1])?;
+        let val = self.resolve_computed_value("", &args[1])?;
         let max = self.resolve_computed_value("", &args[2])?;
-
-        match (min, preferred, max) {
-            (ComputedValue::Length(min_val), ComputedValue::Length(pref_val), ComputedValue::Length(max_val)) => {
-                let clamped = pref_val.min(max_val).max(min_val);
-                Ok(ComputedValue::Length(clamped))
+        match (min, val, max) {
+            (ComputedValue::Length(a), ComputedValue::Length(b), ComputedValue::Length(c)) => {
+                Ok(ComputedValue::Length(b.max(a).min(c)))
             }
-            _ => Err(ComputedStyleError::ValueResolution("clamp() arguments must be lengths".to_string())),
+            _ => Err(ComputedStyleError::ValueResolution("clamp() args must be lengths".into())),
         }
     }
 
     fn resolve_var_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.is_empty() || args.len() > 2 {
-            return Err(ComputedStyleError::ValueResolution("var() requires 1 or 2 arguments".to_string()));
+            return Err(ComputedStyleError::ValueResolution("var() requires 1–2 args".into()));
         }
-
-        if let ComputedValue::String(custom_property_name) = &args[0] {
-            if let Some(value) = self.get_custom_property(custom_property_name) {
-                return Ok(value);
+        if let ComputedValue::String(name) = &args[0] {
+            if let Some(v) = self.properties.get(&format!("--{}", name)) {
+                return Ok(v.clone());
             }
-
             if args.len() == 2 {
                 return Ok(args[1].clone());
             }
         }
-
-        Err(ComputedStyleError::ValueResolution("Custom property not found".to_string()))
+        Err(ComputedStyleError::ValueResolution("var() resolution failed".into()))
     }
 
     fn resolve_rgb_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.len() != 3 {
-            return Err(ComputedStyleError::ValueResolution("rgb() requires 3 arguments".to_string()));
+            return Err(ComputedStyleError::ValueResolution("rgb() requires 3 args".into()));
         }
-
         let r = self.resolve_color_component(&args[0])?;
         let g = self.resolve_color_component(&args[1])?;
         let b = self.resolve_color_component(&args[2])?;
-
         Ok(ComputedValue::Color(Color::from_rgb(r, g, b)))
     }
 
     fn resolve_rgba_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.len() != 4 {
-            return Err(ComputedStyleError::ValueResolution("rgba() requires 4 arguments".to_string()));
+            return Err(ComputedStyleError::ValueResolution("rgba() requires 4 args".into()));
         }
-
         let r = self.resolve_color_component(&args[0])?;
         let g = self.resolve_color_component(&args[1])?;
         let b = self.resolve_color_component(&args[2])?;
         let a = self.resolve_alpha_component(&args[3])?;
-
         Ok(ComputedValue::Color(Color::from_rgba(r, g, b, a)))
     }
 
     fn resolve_hsl_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.len() != 3 {
-            return Err(ComputedStyleError::ValueResolution("hsl() requires 3 arguments".to_string()));
+            return Err(ComputedStyleError::ValueResolution("hsl() requires 3 args".into()));
         }
-
         let h = self.resolve_hue_component(&args[0])?;
         let s = self.resolve_saturation_component(&args[1])?;
         let l = self.resolve_lightness_component(&args[2])?;
-
         Ok(ComputedValue::Color(Color::from_hsl(h, s, l)))
     }
 
     fn resolve_hsla_function(&self, args: &[ComputedValue]) -> Result<ComputedValue> {
         if args.len() != 4 {
-            return Err(ComputedStyleError::ValueResolution("hsla() requires 4 arguments".to_string()));
+            return Err(ComputedStyleError::ValueResolution("hsla() requires 4 args".into()));
         }
-
-        let h = self.resolve_hue_component(&args[0])?;
-        let s = self.resolve_saturation_component(&args[1])?;
-        let l = self.resolve_lightness_component(&args[2])?;
-        let a = self.resolve_alpha_component(&args[3])?;
-
-        let mut color = Color::from_hsl(h, s, l);
-        color.a = a;
-
-        Ok(ComputedValue::Color(color))
+        let mut c = match self.resolve_hsl_function(&args[..3])? {
+            ComputedValue::Color(col) => col,
+            _ => return Err(ComputedStyleError::ValueResolution("hsla() failed".into())),
+        };
+        c.a = self.resolve_alpha_component(&args[3])?;
+        Ok(ComputedValue::Color(c))
     }
 
-    fn resolve_color_component(&self, value: &ComputedValue) -> Result<u8> {
-        match value {
+    fn resolve_color_component(&self, v: &ComputedValue) -> Result<u8> {
+        match v {
             ComputedValue::Number(n) => Ok((*n as u8).min(255)),
             ComputedValue::Percentage(p) => Ok((p * 255.0 / 100.0) as u8),
-            _ => Err(ComputedStyleError::ValueResolution("Invalid color component".to_string())),
+            _ => Err(ComputedStyleError::ValueResolution("Invalid color component".into())),
         }
     }
 
-    fn resolve_alpha_component(&self, value: &ComputedValue) -> Result<f32> {
-        match value {
+    fn resolve_alpha_component(&self, v: &ComputedValue) -> Result<f32> {
+        match v {
             ComputedValue::Number(n) => Ok(n.clamp(0.0, 1.0)),
             ComputedValue::Percentage(p) => Ok((p / 100.0).clamp(0.0, 1.0)),
-            _ => Err(ComputedStyleError::ValueResolution("Invalid alpha component".to_string())),
+            _ => Err(ComputedStyleError::ValueResolution("Invalid alpha component".into())),
         }
     }
 
-    fn resolve_hue_component(&self, value: &ComputedValue) -> Result<f32> {
-        match value {
-            ComputedValue::Number(n) => Ok(n % 360.0),
-            _ => Err(ComputedStyleError::ValueResolution("Invalid hue component".to_string())),
+    fn resolve_hue_component(&self, v: &ComputedValue) -> Result<f32> {
+        match v {
+            ComputedValue::Number(n) => Ok(n.rem_euclid(360.0)),
+            _ => Err(ComputedStyleError::ValueResolution("Invalid hue component".into())),
         }
     }
 
-    fn resolve_saturation_component(&self, value: &ComputedValue) -> Result<f32> {
-        match value {
+    fn resolve_saturation_component(&self, v: &ComputedValue) -> Result<f32> {
+        match v {
             ComputedValue::Percentage(p) => Ok((p / 100.0).clamp(0.0, 1.0)),
-            _ => Err(ComputedStyleError::ValueResolution("Invalid saturation component".to_string())),
+            _ => Err(ComputedStyleError::ValueResolution("Invalid saturation component".into())),
         }
     }
 
-    fn resolve_lightness_component(&self, value: &ComputedValue) -> Result<f32> {
-        match value {
+    fn resolve_lightness_component(&self, v: &ComputedValue) -> Result<f32> {
+        match v {
             ComputedValue::Percentage(p) => Ok((p / 100.0).clamp(0.0, 1.0)),
-            _ => Err(ComputedStyleError::ValueResolution("Invalid lightness component".to_string())),
+            _ => Err(ComputedStyleError::ValueResolution("Invalid lightness component".into())),
         }
-    }
-
-    fn get_custom_property(&self, name: &str) -> Option<ComputedValue> {
-        self.properties.get(&format!("--{}", name)).map(|entry| entry.clone())
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -510,121 +463,142 @@ impl ComputedStyles {
         *self.is_dirty.write() = true;
     }
 
-    pub fn is_inherited_property(property_name: &str) -> bool {
-        Self::get_inherited_properties().contains(&property_name.to_string())
+    pub fn get_custom_properties(&self) -> Vec<String> {
+        let mut props = Vec::new();
+        for r in self.properties.iter() {
+            props.push(r.key().clone());
+        }
+        props
+    }
+
+    pub fn get_all_properties(&self) -> HashMap<String, ComputedValue> {
+        let mut map = HashMap::new();
+        for r in self.properties.iter() {
+            map.insert(r.key().clone(), r.value().clone());
+        }
+        map
+    }
+
+    fn is_inherited_property(name: &str) -> bool {
+        for inherit in Self::get_inherited_properties() {
+            if inherit == name {
+                return true;
+            }
+        }
+        false
     }
 
     fn get_inherited_properties() -> Vec<String> {
-        vec![
-            "color".to_string(),
-            "font-family".to_string(),
-            "font-size".to_string(),
-            "font-style".to_string(),
-            "font-variant".to_string(),
-            "font-weight".to_string(),
-            "font-stretch".to_string(),
-            "font-size-adjust".to_string(),
-            "font".to_string(),
-            "line-height".to_string(),
-            "text-align".to_string(),
-            "text-indent".to_string(),
-            "text-transform".to_string(),
-            "white-space".to_string(),
-            "word-spacing".to_string(),
-            "letter-spacing".to_string(),
-            "text-decoration".to_string(),
-            "text-shadow".to_string(),
-            "direction".to_string(),
-            "writing-mode".to_string(),
-            "list-style".to_string(),
-            "list-style-image".to_string(),
-            "list-style-position".to_string(),
-            "list-style-type".to_string(),
-            "quotes".to_string(),
-            "cursor".to_string(),
-            "visibility".to_string(),
-        ]
+        let mut v = Vec::new();
+        v.push("color".to_string());
+        v.push("font-family".to_string());
+        v.push("font-size".to_string());
+        v.push("font-style".to_string());
+        v.push("font-variant".to_string());
+        v.push("font-weight".to_string());
+        v.push("font-stretch".to_string());
+        v.push("font-size-adjust".to_string());
+        v.push("font".to_string());
+        v.push("line-height".to_string());
+        v.push("text-align".to_string());
+        v.push("text-indent".to_string());
+        v.push("text-transform".to_string());
+        v.push("white-space".to_string());
+        v.push("word-spacing".to_string());
+        v.push("letter-spacing".to_string());
+        v.push("text-decoration".to_string());
+        v.push("text-shadow".to_string());
+        v.push("direction".to_string());
+        v.push("writing-mode".to_string());
+        v.push("list-style".to_string());
+        v.push("list-style-image".to_string());
+        v.push("list-style-position".to_string());
+        v.push("list-style-type".to_string());
+        v.push("quotes".to_string());
+        v.push("cursor".to_string());
+        v.push("visibility".to_string());
+        v
     }
 
     fn get_default_properties() -> Vec<PropertyDefinition> {
         vec![
             PropertyDefinition {
-                name: "display".to_string(),
+                name: "display".into(),
                 inherited: false,
-                initial_value: ComputedValue::Keyword("block".to_string()),
-                applies_to: vec!["all".to_string()],
+                initial_value: ComputedValue::Keyword("block".into()),
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::None,
                 computed_value: ComputedValueType::AsSpecified,
             },
             PropertyDefinition {
-                name: "position".to_string(),
+                name: "position".into(),
                 inherited: false,
-                initial_value: ComputedValue::Keyword("static".to_string()),
-                applies_to: vec!["all".to_string()],
+                initial_value: ComputedValue::Keyword("static".into()),
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::None,
                 computed_value: ComputedValueType::AsSpecified,
             },
             PropertyDefinition {
-                name: "width".to_string(),
+                name: "width".into(),
                 inherited: false,
                 initial_value: ComputedValue::Auto,
-                applies_to: vec!["all".to_string()],
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::Width,
                 computed_value: ComputedValueType::PercentageOrAbsoluteLength,
             },
             PropertyDefinition {
-                name: "height".to_string(),
+                name: "height".into(),
                 inherited: false,
                 initial_value: ComputedValue::Auto,
-                applies_to: vec!["all".to_string()],
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::Height,
                 computed_value: ComputedValueType::PercentageOrAbsoluteLength,
             },
             PropertyDefinition {
-                name: "margin".to_string(),
+                name: "margin".into(),
                 inherited: false,
                 initial_value: ComputedValue::Length(0.0),
-                applies_to: vec!["all".to_string()],
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::Width,
                 computed_value: ComputedValueType::PercentageOrAbsoluteLength,
             },
             PropertyDefinition {
-                name: "padding".to_string(),
+                name: "padding".into(),
                 inherited: false,
                 initial_value: ComputedValue::Length(0.0),
-                applies_to: vec!["all".to_string()],
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::Width,
                 computed_value: ComputedValueType::PercentageOrAbsoluteLength,
             },
             PropertyDefinition {
-                name: "color".to_string(),
+                name: "color".into(),
                 inherited: true,
                 initial_value: ComputedValue::Color(Color::BLACK),
-                applies_to: vec!["all".to_string()],
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::None,
                 computed_value: ComputedValueType::ColorValue,
             },
             PropertyDefinition {
-                name: "background-color".to_string(),
+                name: "background-color".into(),
                 inherited: false,
                 initial_value: ComputedValue::Color(Color::TRANSPARENT),
-                applies_to: vec!["all".to_string()],
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::None,
                 computed_value: ComputedValueType::ColorValue,
             },
             PropertyDefinition {
-                name: "font-size".to_string(),
+                name: "font-size".into(),
                 inherited: true,
                 initial_value: ComputedValue::Length(16.0),
-                applies_to: vec!["all".to_string()],
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::FontSize,
                 computed_value: ComputedValueType::AbsoluteLength,
             },
             PropertyDefinition {
-                name: "font-family".to_string(),
+                name: "font-family".into(),
                 inherited: true,
-                initial_value: ComputedValue::String("serif".to_string()),
-                applies_to: vec!["all".to_string()],
+                initial_value: ComputedValue::String("serif".into()),
+                applies_to: vec!["all".into()],
                 percentages: PercentageBase::None,
                 computed_value: ComputedValueType::AsSpecified,
             },
@@ -632,49 +606,12 @@ impl ComputedStyles {
     }
 
     fn get_property_definition(name: &str) -> Option<PropertyDefinition> {
-        Self::get_default_properties()
-            .into_iter()
-            .find(|prop| prop.name == name)
-    }
-
-    pub fn get_all_properties(&self) -> HashMap<String, ComputedValue> {
-        self.properties.iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect()
-    }
-
-    pub fn get_used_value(&self, property_name: &str) -> Result<f32> {
-        let computed = self.get_computed_value(property_name)?;
-        
-        match computed {
-            ComputedValue::Length(value) => Ok(value),
-            ComputedValue::Number(value) => Ok(value),
-            ComputedValue::Percentage(percentage) => {
-                let base = self.get_percentage_base(property_name);
-                self.resolve_percentage(percentage, base)
+        for def in Self::get_default_properties() {
+            if def.name == name {
+                return Some(def);
             }
-            ComputedValue::Auto => {
-                match property_name {
-                    "width" => Ok(self.context.containing_block_width),
-                    "height" => Ok(0.0),
-                    _ => Ok(0.0),
-                }
-            }
-            _ => Err(ComputedStyleError::ValueResolution(
-                format!("Cannot convert {} to used value", property_name)
-            )),
         }
-    }
-
-    pub fn clone_with_new_context(&self, context: LayoutContext) -> ComputedStyles {
-        ComputedStyles {
-            properties: DashMap::new(),
-            specificity_map: DashMap::new(),
-            source_map: DashMap::new(),
-            parent_styles: self.parent_styles.clone(),
-            context,
-            is_dirty: RwLock::new(true),
-        }
+        None
     }
 }
 
@@ -697,88 +634,65 @@ impl StyleEngine {
         }
     }
 
-    pub async fn compute_styles(&self, document: &Document) -> Result<()> {
+    pub fn compute_styles(&self, document: &Document) -> Result<()> {
         self.style_cache.clear();
-        
-        if let Some(root_id) = document.get_root_node() {
-            let context = self.get_current_context();
-            self.compute_styles_recursive(root_id, None, document, context).await?;
+        if let Some(root) = document.get_root_node() {
+            let ctx = self.get_current_context();
+            self.compute_styles_recursive(root, None, document, ctx)?;
         }
-
         Ok(())
     }
 
-    async fn compute_styles_recursive(
+    fn compute_styles_recursive(
         &self,
-        node_id: NodeId,
-        parent_styles: Option<Arc<ComputedStyles>>,
+        node: NodeId,
+        parent: Option<Arc<ComputedStyles>>,
         document: &Document,
         context: LayoutContext,
     ) -> Result<()> {
-        let computed_styles = self.compute_styles_for_node(node_id, parent_styles.as_ref(), document)?;
-        
-        let children = document.get_children(node_id);
-        for &child_id in &children {
-            Box::pin(self.compute_styles_recursive(
-                child_id, 
-                Some(computed_styles.clone()), 
-                document, 
-                context.clone()
-            )).await?;
+        let computed = if let Some(p) = parent {
+            Arc::new(ComputedStyles::with_parent(context.clone(), p.clone()))
+        } else {
+            Arc::new(ComputedStyles::new(context.clone()))
+        };
+        self.apply_matching_rules(node, &computed, document)?;
+        self.style_cache.insert(node, computed.clone());
+        for &child in &document.get_children(node) {
+            self.compute_styles_recursive(child, Some(computed.clone()), document, context.clone())?;
         }
-        
         Ok(())
     }
 
-    fn compute_styles_for_node(
+    fn apply_matching_rules(
         &self,
-        node_id: NodeId,
-        parent_styles: Option<&Arc<ComputedStyles>>,
-        document: &Document,
-    ) -> Result<Arc<ComputedStyles>> {
-        let context = self.get_current_context();
-        
-        let computed_styles = if let Some(parent) = parent_styles {
-            Arc::new(ComputedStyles::with_parent(context, parent.clone()))
-        } else {
-            Arc::new(ComputedStyles::new(context))
-        };
-
-        futures::executor::block_on(self.apply_matching_rules(node_id, &computed_styles, document))?;
-        
-        self.style_cache.insert(node_id, computed_styles.clone());
-        Ok(computed_styles)
-    }
-
-    async fn apply_matching_rules(
-        &self,
-        node_id: NodeId,
-        computed_styles: &ComputedStyles,
+        node: NodeId,
+        computed: &ComputedStyles,
         document: &Document,
     ) -> Result<()> {
-        let stylesheets = self.stylesheet_cache.read();
-        
-        for rule in stylesheets.iter() {
+        let sheets = self.stylesheet_cache.read();
+        for rule in sheets.iter() {
             match rule.as_ref() {
                 CSSRule::Style(style_rule) => {
                     for selector in &style_rule.selectors {
-                        if self.selector_engine.matches(&format!("{:?}", selector), node_id, document)
-                            .map_err(|e| ComputedStyleError::Cascade(e.to_string()))? {
-                            
-                            self.apply_style_rule(style_rule, computed_styles)?;
+                        if self.selector_engine
+                            .matches(&format!("{:?}", selector), node, document)
+                            .map_err(|e| ComputedStyleError::Cascade(e.to_string()))?
+                        {
+                            self.apply_style_rule(style_rule, computed)?;
                             break;
                         }
                     }
                 }
                 CSSRule::Media(media_rule) => {
                     if self.evaluate_media_query(&media_rule.media_query) {
-                        for nested_rule in &media_rule.rules {
-                            if let CSSRule::Style(style_rule) = nested_rule {
+                        for nested in &media_rule.rules {
+                            if let CSSRule::Style(style_rule) = nested {
                                 for selector in &style_rule.selectors {
-                                    if self.selector_engine.matches(&format!("{:?}", selector), node_id, document)
-                                        .map_err(|e| ComputedStyleError::Cascade(e.to_string()))? {
-                                        
-                                        self.apply_style_rule(style_rule, computed_styles)?;
+                                    if self.selector_engine
+                                        .matches(&format!("{:?}", selector), node, document)
+                                        .map_err(|e| ComputedStyleError::Cascade(e.to_string()))?
+                                    {
+                                        self.apply_style_rule(style_rule, computed)?;
                                         break;
                                     }
                                 }
@@ -789,27 +703,18 @@ impl StyleEngine {
                 _ => {}
             }
         }
-
         Ok(())
     }
 
     fn apply_style_rule(
         &self,
         style_rule: &CSSStyleRule,
-        computed_styles: &ComputedStyles,
+        computed: &ComputedStyles,
     ) -> Result<()> {
-        let properties = style_rule.declarations.get_all_properties();
-        
-        for (property_name, css_value) in properties {
-            let computed_value = self.convert_css_value_to_computed(&css_value)?;
-            computed_styles.set_property(
-                &property_name,
-                computed_value,
-                style_rule.specificity,
-                "author",
-            );
+        for (prop, css_value , _important) in &style_rule.declarations.properties {
+            let cv = self.convert_css_value_to_computed(css_value)?;
+            computed.set_property(prop, cv, style_rule.specificity, "author");
         }
-
         Ok(())
     }
 
@@ -817,24 +722,24 @@ impl StyleEngine {
         Ok(css_value.computed.clone())
     }
 
-    fn evaluate_media_query(&self, _media_query: &crate::core::css::parser::MediaQuery) -> bool {
+    fn evaluate_media_query(&self, _mq: &crate::core::css::parser::MediaQuery) -> bool {
         true
     }
 
-    pub fn get_computed_styles(&self, node_id: NodeId) -> Option<Arc<ComputedStyles>> {
-        self.style_cache.get(&node_id).map(|entry| entry.clone())
+    pub fn get_computed_styles(&self, node: NodeId) -> Option<Arc<ComputedStyles>> {
+        self.style_cache.get(&node).map(|e| e.clone())
     }
 
     pub fn add_stylesheet(&self, rules: Vec<CSSRule>) {
-        let mut stylesheets = self.stylesheet_cache.write();
+        let mut ss = self.stylesheet_cache.write();
         for rule in rules {
-            stylesheets.push(Arc::new(rule));
+            ss.push(Arc::new(rule));
         }
     }
 
-    pub fn invalidate_node(&self, node_id: NodeId) {
-        self.style_cache.remove(&node_id);
-        self.selector_engine.invalidate_node_cache(node_id);
+    pub fn invalidate_node(&self, node: NodeId) {
+        self.style_cache.remove(&node);
+        self.selector_engine.invalidate_node_cache(node);
     }
 
     pub fn invalidate_all(&self) {
@@ -846,26 +751,25 @@ impl StyleEngine {
         self.context_stack.read().last().cloned().unwrap_or_default()
     }
 
-    pub fn push_context(&self, context: LayoutContext) {
-        self.context_stack.write().push(context);
+    pub fn push_context(&self, ctx: LayoutContext) {
+        self.context_stack.write().push(ctx);
     }
 
     pub fn pop_context(&self) {
-        let mut stack = self.context_stack.write();
-        if stack.len() > 1 {
-            stack.pop();
+        let mut stk = self.context_stack.write();
+        if stk.len() > 1 {
+            stk.pop();
         }
     }
 
     pub fn get_cache_stats(&self) -> serde_json::Value {
-        let selector_stats = self.selector_engine.get_cache_stats();
-        
+        let sel_stats = self.selector_engine.get_cache_stats();
         serde_json::json!({
             "computed_styles_cache_size": self.style_cache.len(),
             "stylesheet_count": self.stylesheet_cache.read().len(),
             "media_queries_count": self.media_queries.read().len(),
             "context_stack_depth": self.context_stack.read().len(),
-            "selector_engine": selector_stats,
+            "selector_engine": sel_stats,
         })
     }
 }

@@ -30,18 +30,9 @@ pub struct Specificity {
 }
 
 impl Specificity {
-    pub fn new() -> Self {
-        Self { a: 0, b: 0, c: 0, d: 0 }
-    }
-
-    pub fn with_inline() -> Self {
-        Self { a: 1, b: 0, c: 0, d: 0 }
-    }
-
-    pub fn value(&self) -> u32 {
-        self.a * 1000 + self.b * 100 + self.c * 10 + self.d
-    }
-
+    pub fn new() -> Self { Self { a: 0, b: 0, c: 0, d: 0 } }
+    pub fn with_inline() -> Self { Self { a: 1, b: 0, c: 0, d: 0 } }
+    pub fn value(&self) -> u32 { self.a * 1000 + self.b * 100 + self.c * 10 + self.d }
     pub fn add(&mut self, other: &Specificity) {
         self.a += other.a;
         self.b += other.b;
@@ -51,15 +42,11 @@ impl Specificity {
 }
 
 impl PartialOrd for Specificity {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
 }
 
 impl Ord for Specificity {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.value().cmp(&other.value())
-    }
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering { self.value().cmp(&other.value()) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -145,45 +132,40 @@ pub struct NthPattern {
 }
 
 impl NthPattern {
-    pub fn new(a: i32, b: i32) -> Self {
-        Self { a, b }
-    }
+    pub fn new(a: i32, b: i32) -> Self { Self { a, b } }
 
     pub fn parse(input: &str) -> Result<Self> {
         let input = input.trim();
-        
         match input {
             "odd" => Ok(Self::new(2, 1)),
             "even" => Ok(Self::new(2, 0)),
             _ => {
                 if input == "n" {
                     Ok(Self::new(1, 0))
-                } else if input.ends_with("n") {
-                    let a_str = input.trim_end_matches('n');
+                } else if input.ends_with('n') {
+                    let a_str = input[..input.len()-1].trim();
                     let a = match a_str {
                         "" | "+" => 1,
                         "-" => -1,
-                        _ => a_str.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".to_string()))?
+                        _ => a_str.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".into()))?,
                     };
                     Ok(Self::new(a, 0))
                 } else if let Some(plus_pos) = input.find('+') {
-                    let a_part = input[..plus_pos].trim_end_matches('n');
-                    let b_part = &input[plus_pos + 1..];
-                    
-                    let a = if a_part.is_empty() { 1 } else { a_part.parse()? };
-                    let b = b_part.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".to_string()))?;
-                    
+                    let (a_part, b_part) = (&input[..plus_pos], &input[plus_pos+1..]);
+                    let a_str = a_part.trim().trim_end_matches('n').trim();
+                    let b_str = b_part.trim();
+                    let a = if a_str.is_empty() { 1 } else { a_str.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".into()))? };
+                    let b = b_str.parse::<i32>().map_err(|_| SelectorError::Parse("Invalid nth pattern".into()))?;
                     Ok(Self::new(a, b))
                 } else if let Some(minus_pos) = input.rfind('-') {
-                    let a_part = input[..minus_pos].trim_end_matches('n');
-                    let b_part = &input[minus_pos + 1..];
-                    
-                    let a = if a_part.is_empty() { 1 } else { a_part.parse()? };
-                    let b: i32 = b_part.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".to_string()))?;
-                    
+                    let (a_part, b_part) = (&input[..minus_pos], &input[minus_pos+1..]);
+                    let a_str = a_part.trim().trim_end_matches('n').trim();
+                    let b_str = b_part.trim();
+                    let a = if a_str.is_empty() { 1 } else { a_str.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".into()))? };
+                    let b = b_str.parse::<i32>().map_err(|_| SelectorError::Parse("Invalid nth pattern".into()))?;
                     Ok(Self::new(a, -b))
                 } else {
-                    let b = input.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".to_string()))?;
+                    let b = input.parse().map_err(|_| SelectorError::Parse("Invalid nth pattern".into()))?;
                     Ok(Self::new(0, b))
                 }
             }
@@ -224,48 +206,22 @@ impl SimpleSelector {
         }
     }
 
-    pub fn with_element(element_name: String) -> Self {
-        Self {
-            element_name: Some(element_name),
-            ..Self::new()
-        }
-    }
-
-    pub fn with_id(id: String) -> Self {
-        Self {
-            id: Some(id),
-            ..Self::new()
-        }
-    }
-
+    pub fn with_element(element_name: String) -> Self { Self { element_name: Some(element_name), ..Self::new() } }
+    pub fn with_id(id: String) -> Self { Self { id: Some(id), ..Self::new() } }
     pub fn with_class(class: String) -> Self {
         let mut classes = SmallVec::new();
         classes.push(class);
-        Self {
-            classes,
-            ..Self::new()
-        }
+        Self { classes, ..Self::new() }
     }
 
     pub fn specificity(&self) -> Specificity {
         let mut spec = Specificity::new();
-        
-        if self.id.is_some() {
-            spec.b += 1;
-        }
-        
+        if self.id.is_some() { spec.b += 1 }
         spec.c += self.classes.len() as u32;
         spec.c += self.attributes.len() as u32;
         spec.c += self.pseudo_classes.len() as u32;
-        
-        if self.element_name.is_some() {
-            spec.d += 1;
-        }
-        
-        if self.pseudo_element.is_some() {
-            spec.d += 1;
-        }
-        
+        if self.element_name.is_some() { spec.d += 1 }
+        if self.pseudo_element.is_some() { spec.d += 1 }
         spec
     }
 }
@@ -278,29 +234,13 @@ pub struct ComplexSelector {
 }
 
 impl ComplexSelector {
-    pub fn new(simple_selector: SimpleSelector) -> Self {
-        Self {
-            simple_selector,
-            combinator: Combinator::None,
-            next: None,
-        }
-    }
-
+    pub fn new(simple_selector: SimpleSelector) -> Self { Self { simple_selector, combinator: Combinator::None, next: None } }
     pub fn with_combinator(simple_selector: SimpleSelector, combinator: Combinator, next: ComplexSelector) -> Self {
-        Self {
-            simple_selector,
-            combinator,
-            next: Some(Box::new(next)),
-        }
+        Self { simple_selector, combinator, next: Some(Box::new(next)) }
     }
-
     pub fn specificity(&self) -> Specificity {
         let mut spec = self.simple_selector.specificity();
-        
-        if let Some(ref next) = self.next {
-            spec.add(&next.specificity());
-        }
-        
+        if let Some(ref next) = self.next { spec.add(&next.specificity()) }
         spec
     }
 }
@@ -311,29 +251,16 @@ pub struct Selector {
 }
 
 impl Selector {
-    pub fn new() -> Self {
-        Self {
-            complex_selectors: SmallVec::new(),
-        }
-    }
-
+    pub fn new() -> Self { Self { complex_selectors: SmallVec::new() } }
     pub fn parse(input: &str) -> Result<Self> {
         let mut parser = SelectorParser::new(input);
         parser.parse()
     }
-
     pub fn specificity(&self) -> u32 {
-        self.complex_selectors
-            .iter()
-            .map(|cs| cs.specificity().value())
-            .max()
-            .unwrap_or(0)
+        self.complex_selectors.iter().map(|cs| cs.specificity().value()).max().unwrap_or(0)
     }
-
     pub fn matches(&self, node_id: NodeId, document: &Document, matcher: &SelectorMatcher) -> bool {
-        self.complex_selectors
-            .iter()
-            .any(|cs| matcher.matches_complex_selector(cs, node_id, document))
+        self.complex_selectors.iter().any(|cs| matcher.matches_complex_selector(cs, node_id, document))
     }
 }
 
@@ -345,120 +272,74 @@ pub struct SelectorParser<'a> {
 
 impl<'a> SelectorParser<'a> {
     fn new(input: &'a str) -> Self {
-        let mut parser = Self {
-            input,
-            position: 0,
-            current: None,
-        };
-        parser.advance();
-        parser
+        let mut p = Self { input, position: 0, current: None };
+        p.advance();
+        p
     }
 
     fn parse(&mut self) -> Result<Selector> {
         let mut complex_selectors = SmallVec::new();
-        
         loop {
             self.skip_whitespace();
-            
-            if self.is_at_end() {
-                break;
-            }
-            
+            if self.is_at_end() { break }
             complex_selectors.push(self.parse_complex_selector()?);
-            
             self.skip_whitespace();
-            
-            if self.consume_char(',') {
-                continue;
-            } else {
-                break;
-            }
+            if !self.consume_char(',') { break }
         }
-        
         Ok(Selector { complex_selectors })
     }
 
     fn parse_complex_selector(&mut self) -> Result<ComplexSelector> {
-        let simple_selector = self.parse_simple_selector()?;
-        
+        let simple = self.parse_simple_selector()?;
         self.skip_whitespace();
-        
         if self.is_at_end() || self.current == Some(',') {
-            return Ok(ComplexSelector::new(simple_selector));
+            return Ok(ComplexSelector::new(simple));
         }
-        
-        let combinator = self.parse_combinator();
-        
-        if combinator != Combinator::None {
+        let comb = self.parse_combinator();
+        if comb != Combinator::None {
             let next = self.parse_complex_selector()?;
-            Ok(ComplexSelector::with_combinator(simple_selector, combinator, next))
+            Ok(ComplexSelector::with_combinator(simple, comb, next))
         } else {
-            Ok(ComplexSelector::new(simple_selector))
+            Ok(ComplexSelector::new(simple))
         }
     }
 
     fn parse_simple_selector(&mut self) -> Result<SimpleSelector> {
-        let mut selector = SimpleSelector::new();
-        
+        let mut sel = SimpleSelector::new();
         while !self.is_at_end() {
             match self.current {
-                Some('*') => {
-                    self.advance();
-                    selector.element_name = Some("*".to_string());
-                }
-                Some('#') => {
-                    self.advance();
-                    selector.id = Some(self.parse_name()?);
-                }
-                Some('.') => {
-                    self.advance();
-                    selector.classes.push(self.parse_name()?);
-                }
-                Some('[') => {
-                    selector.attributes.push(self.parse_attribute()?);
-                }
+                Some('*') => { self.advance(); sel.element_name = Some("*".into()) }
+                Some('#') => { self.advance(); sel.id = Some(self.parse_name()?) }
+                Some('.') => { self.advance(); sel.classes.push(self.parse_name()?) }
+                Some('[') => { sel.attributes.push(self.parse_attribute()?) }
                 Some(':') => {
                     self.advance();
                     if self.current == Some(':') {
                         self.advance();
-                        selector.pseudo_element = Some(self.parse_pseudo_element()?);
+                        sel.pseudo_element = Some(self.parse_pseudo_element()?)
                     } else {
-                        selector.pseudo_classes.push(self.parse_pseudo_class()?);
+                        sel.pseudo_classes.push(self.parse_pseudo_class()?)
                     }
                 }
                 Some(c) if c.is_alphabetic() || c == '_' => {
-                    if selector.element_name.is_none() {
-                        selector.element_name = Some(self.parse_name()?);
+                    if sel.element_name.is_none() {
+                        sel.element_name = Some(self.parse_name()?)
                     } else {
-                        break;
+                        break
                     }
                 }
                 _ => break,
             }
         }
-        
-        Ok(selector)
+        Ok(sel)
     }
 
     fn parse_combinator(&mut self) -> Combinator {
         self.skip_whitespace();
-        
-        match self.current {
-            Some('>') => {
-                self.advance();
-                self.skip_whitespace();
-                Combinator::Child
-            }
-            Some('+') => {
-                self.advance();
-                self.skip_whitespace();
-                Combinator::NextSibling
-            }
-            Some('~') => {
-                self.advance();
-                self.skip_whitespace();
-                Combinator::SubsequentSibling
-            }
+        let comb = match self.current {
+            Some('>') => { self.advance(); Combinator::Child }
+            Some('+') => { self.advance(); Combinator::NextSibling }
+            Some('~') => { self.advance(); Combinator::SubsequentSibling }
             _ => {
                 if !self.is_at_end() && self.current != Some(',') {
                     Combinator::Descendant
@@ -466,65 +347,36 @@ impl<'a> SelectorParser<'a> {
                     Combinator::None
                 }
             }
-        }
+        };
+        self.skip_whitespace();
+        comb
     }
 
     fn parse_attribute(&mut self) -> Result<AttributeSelector> {
         self.expect_char('[')?;
-        
         let name = self.parse_name()?;
-        
         self.skip_whitespace();
-        
-        let (operator, value) = if self.current == Some(']') {
+        let (op, val) = if self.current == Some(']') {
             (AttributeOperator::Exists, None)
         } else {
-            let op = match self.current {
-                Some('=') => {
-                    self.advance();
-                    AttributeOperator::Equal
-                }
-                Some('~') => {
-                    self.advance();
-                    self.expect_char('=')?;
-                    AttributeOperator::Contains
-                }
-                Some('|') => {
-                    self.advance();
-                    self.expect_char('=')?;
-                    AttributeOperator::DashMatch
-                }
-                Some('^') => {
-                    self.advance();
-                    self.expect_char('=')?;
-                    AttributeOperator::StartsWith
-                }
-                Some('$') => {
-                    self.advance();
-                    self.expect_char('=')?;
-                    AttributeOperator::EndsWith
-                }
-                Some('*') => {
-                    self.advance();
-                    self.expect_char('=')?;
-                    AttributeOperator::Substring
-                }
-                _ => return Err(SelectorError::Parse("Expected attribute operator".to_string())),
+            let operator = match self.current {
+                Some('=') => { self.advance(); AttributeOperator::Equal }
+                Some('~') => { self.advance(); self.expect_char('=')?; AttributeOperator::Contains }
+                Some('|') => { self.advance(); self.expect_char('=')?; AttributeOperator::DashMatch }
+                Some('^') => { self.advance(); self.expect_char('=')?; AttributeOperator::StartsWith }
+                Some('$') => { self.advance(); self.expect_char('=')?; AttributeOperator::EndsWith }
+                Some('*') => { self.advance(); self.expect_char('=')?; AttributeOperator::Substring }
+                _ => return Err(SelectorError::Parse("Expected attribute operator".into())),
             };
-            
             self.skip_whitespace();
-            
             let value = if self.current == Some('"') || self.current == Some('\'') {
                 Some(self.parse_string()?)
             } else {
                 Some(self.parse_name()?)
             };
-            
-            (op, value)
+            (operator, value)
         };
-        
         self.skip_whitespace();
-        
         let case_insensitive = if matches!(self.current, Some('i') | Some('I')) {
             self.advance();
             self.skip_whitespace();
@@ -532,21 +384,12 @@ impl<'a> SelectorParser<'a> {
         } else {
             false
         };
-        
         self.expect_char(']')?;
-        
-        Ok(AttributeSelector {
-            name,
-            namespace: None,
-            operator,
-            value,
-            case_insensitive,
-        })
+        Ok(AttributeSelector { name, namespace: None, operator: op, value: val, case_insensitive })
     }
 
     fn parse_pseudo_class(&mut self) -> Result<PseudoClass> {
         let name = self.parse_name()?;
-        
         match name.as_str() {
             "root" => Ok(PseudoClass::Root),
             "empty" => Ok(PseudoClass::Empty),
@@ -572,55 +415,19 @@ impl<'a> SelectorParser<'a> {
             "optional" => Ok(PseudoClass::Optional),
             "read-only" => Ok(PseudoClass::ReadOnly),
             "read-write" => Ok(PseudoClass::ReadWrite),
-            "nth-child" => {
-                self.expect_char('(')?;
-                let pattern = self.parse_nth_pattern()?;
-                self.expect_char(')')?;
-                Ok(PseudoClass::NthChild(pattern))
-            }
-            "nth-last-child" => {
-                self.expect_char('(')?;
-                let pattern = self.parse_nth_pattern()?;
-                self.expect_char(')')?;
-                Ok(PseudoClass::NthLastChild(pattern))
-            }
-            "nth-of-type" => {
-                self.expect_char('(')?;
-                let pattern = self.parse_nth_pattern()?;
-                self.expect_char(')')?;
-                Ok(PseudoClass::NthOfType(pattern))
-            }
-            "nth-last-of-type" => {
-                self.expect_char('(')?;
-                let pattern = self.parse_nth_pattern()?;
-                self.expect_char(')')?;
-                Ok(PseudoClass::NthLastOfType(pattern))
-            }
-            "not" => {
-                self.expect_char('(')?;
-                let selector = self.parse_simple_selector()?;
-                self.expect_char(')')?;
-                Ok(PseudoClass::Not(Box::new(selector)))
-            }
-            "lang" => {
-                self.expect_char('(')?;
-                let lang = self.parse_string().or_else(|_| self.parse_name())?;
-                self.expect_char(')')?;
-                Ok(PseudoClass::Lang(lang))
-            }
-            "dir" => {
-                self.expect_char('(')?;
-                let dir = self.parse_string().or_else(|_| self.parse_name())?;
-                self.expect_char(')')?;
-                Ok(PseudoClass::Dir(dir))
-            }
+            "nth-child" => { self.expect_char('(')?; let pat = self.parse_nth_pattern()?; self.expect_char(')')?; Ok(PseudoClass::NthChild(pat)) }
+            "nth-last-child" => { self.expect_char('(')?; let pat = self.parse_nth_pattern()?; self.expect_char(')')?; Ok(PseudoClass::NthLastChild(pat)) }
+            "nth-of-type" => { self.expect_char('(')?; let pat = self.parse_nth_pattern()?; self.expect_char(')')?; Ok(PseudoClass::NthOfType(pat)) }
+            "nth-last-of-type" => { self.expect_char('(')?; let pat = self.parse_nth_pattern()?; self.expect_char(')')?; Ok(PseudoClass::NthLastOfType(pat)) }
+            "not" => { self.expect_char('(')?; let sel = self.parse_simple_selector()?; self.expect_char(')')?; Ok(PseudoClass::Not(Box::new(sel))) }
+            "lang" => { self.expect_char('(')?; let lang = self.parse_string().or_else(|_| self.parse_name())?; self.expect_char(')')?; Ok(PseudoClass::Lang(lang)) }
+            "dir" => { self.expect_char('(')?; let dir = self.parse_string().or_else(|_| self.parse_name())?; self.expect_char(')')?; Ok(PseudoClass::Dir(dir)) }
             _ => Err(SelectorError::UnsupportedPseudoClass(name)),
         }
     }
 
     fn parse_pseudo_element(&mut self) -> Result<PseudoElement> {
         let name = self.parse_name()?;
-        
         match name.as_str() {
             "before" => Ok(PseudoElement::Before),
             "after" => Ok(PseudoElement::After),
@@ -636,85 +443,53 @@ impl<'a> SelectorParser<'a> {
 
     fn parse_nth_pattern(&mut self) -> Result<NthPattern> {
         self.skip_whitespace();
-        
         let start = self.position;
-        while !self.is_at_end() && self.current != Some(')') && !self.current.unwrap().is_whitespace() {
+        while let Some(c) = self.current {
+            if c == ')' || c.is_whitespace() { break }
             self.advance();
         }
-        
-        let pattern_str = &self.input[start..self.position];
-        NthPattern::parse(pattern_str)
+        let pat = &self.input[start..self.position];
+        NthPattern::parse(pat)
     }
 
     fn parse_name(&mut self) -> Result<String> {
         let start = self.position;
-        
         while let Some(c) = self.current {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
-                self.advance();
-            } else {
-                break;
-            }
+            if c.is_alphanumeric() || c == '_' || c == '-' { self.advance() } else { break }
         }
-        
         if start == self.position {
-            Err(SelectorError::Parse("Expected name".to_string()))
+            Err(SelectorError::Parse("Expected name".into()))
         } else {
             Ok(self.input[start..self.position].to_string())
         }
     }
 
     fn parse_string(&mut self) -> Result<String> {
-        let quote = self.current.ok_or_else(|| SelectorError::Parse("Expected string".to_string()))?;
-        
-        if quote != '"' && quote != '\'' {
-            return Err(SelectorError::Parse("Expected quoted string".to_string()));
-        }
-        
+        let quote = self.current.ok_or_else(|| SelectorError::Parse("Expected string".into()))?;
+        if quote != '"' && quote != '\'' { return Err(SelectorError::Parse("Expected quoted string".into())) }
         self.advance();
-        
-        let mut string = String::new();
+        let mut s = String::new();
         while let Some(c) = self.current {
-            if c == quote {
-                self.advance();
-                return Ok(string);
-            }
-            
+            if c == quote { self.advance(); return Ok(s) }
             if c == '\\' {
                 self.advance();
-                if let Some(escaped) = self.current {
-                    string.push(escaped);
-                    self.advance();
-                }
-            } else {
-                string.push(c);
-                self.advance();
-            }
+                if let Some(e) = self.current { s.push(e); self.advance() }
+            } else { s.push(c); self.advance() }
         }
-        
-        Err(SelectorError::Parse("Unterminated string".to_string()))
+        Err(SelectorError::Parse("Unterminated string".into()))
     }
 
     fn advance(&mut self) {
-        if self.position < self.input.len() {
-            self.position += self.current.map_or(0, |c| c.len_utf8());
-            self.current = self.input[self.position..].chars().next();
-        } else {
-            self.current = None;
+        if let Some(c) = self.current {
+            self.position += c.len_utf8();
         }
+        self.current = self.input[self.position..].chars().next();
     }
 
-    fn is_at_end(&self) -> bool {
-        self.current.is_none()
-    }
-
+    fn is_at_end(&self) -> bool { self.current.is_none() }
     fn skip_whitespace(&mut self) {
         while let Some(c) = self.current {
-            if c.is_whitespace() {
-                self.advance();
-            } else {
-                break;
-            }
+            if c.is_whitespace() { self.advance() } else { break }
         }
     }
 
@@ -728,11 +503,8 @@ impl<'a> SelectorParser<'a> {
     }
 
     fn expect_char(&mut self, expected: char) -> Result<()> {
-        if self.consume_char(expected) {
-            Ok(())
-        } else {
-            Err(SelectorError::Parse(format!("Expected '{}'", expected)))
-        }
+        if self.consume_char(expected) { Ok(()) }
+        else { Err(SelectorError::Parse(format!("Expected '{}'", expected))) }
     }
 }
 
@@ -773,24 +545,20 @@ impl SelectorMatcher {
     }
 
     pub fn matches(&self, selector: &Selector, node_id: NodeId, document: &Document) -> bool {
-        let selector_string = format!("{:?}", selector);
-        let cache_key = (selector_string.clone(), node_id);
-        
-        if let Some(cached_result) = self.match_cache.get(&cache_key) {
-            return *cached_result;
+        let key = (format!("{:?}", selector), node_id);
+        if let Some(r) = self.match_cache.get(&key) {
+            return *r;
         }
-
-        let result = selector.matches(node_id, document, self);
-        self.match_cache.insert(cache_key, result);
-        result
+        let res = selector.matches(node_id, document, self);
+        self.match_cache.insert(key, res);
+        res
     }
 
     pub fn matches_complex_selector(&self, selector: &ComplexSelector, node_id: NodeId, document: &Document) -> bool {
         if !self.matches_simple_selector(&selector.simple_selector, node_id, document) {
             return false;
         }
-
-        if let Some(ref next) = selector.next {
+        if let Some(next) = &selector.next {
             match selector.combinator {
                 Combinator::None => true,
                 Combinator::Descendant => self.matches_descendant(next, node_id, document),
@@ -804,12 +572,11 @@ impl SelectorMatcher {
     }
 
     fn matches_simple_selector(&self, selector: &SimpleSelector, node_id: NodeId, document: &Document) -> bool {
-        let node_cache = self.get_or_create_node_cache(node_id, document);
-
-        if let Some(ref element_name) = selector.element_name {
-            if element_name != "*" {
-                if let Some(ref cached_element) = node_cache.element_name {
-                    if cached_element.to_lowercase() != element_name.to_lowercase() {
+        let cache = self.get_or_create_node_cache(node_id, document);
+        if let Some(name) = &selector.element_name {
+            if name != "*" {
+                if let Some(en) = &cache.element_name {
+                    if en.to_lowercase() != name.to_lowercase() {
                         return false;
                     }
                 } else {
@@ -817,60 +584,46 @@ impl SelectorMatcher {
                 }
             }
         }
-
-        if let Some(ref id) = selector.id {
-            if node_cache.id.as_ref() != Some(id) {
+        if let Some(id) = &selector.id {
+            if cache.id.as_ref() != Some(id) {
                 return false;
             }
         }
-
         for class in &selector.classes {
-            if !node_cache.classes.contains(class) {
+            if !cache.classes.contains(class) {
                 return false;
             }
         }
-
-        for attribute in &selector.attributes {
-            if !self.matches_attribute(attribute, &node_cache.attributes) {
+        for attr in &selector.attributes {
+            if !self.matches_attribute(attr, &cache.attributes) {
                 return false;
             }
         }
-
-        for pseudo_class in &selector.pseudo_classes {
-            if !self.matches_pseudo_class(pseudo_class, node_id, document) {
+        for pc in &selector.pseudo_classes {
+            if !self.matches_pseudo_class(pc, node_id, document) {
                 return false;
             }
         }
-
         true
     }
 
     fn get_or_create_node_cache(&self, node_id: NodeId, document: &Document) -> dashmap::mapref::one::Ref<NodeId, NodeCache> {
         if !self.node_cache.contains_key(&node_id) {
             if let Some(node) = document.get_node(node_id) {
-                let node_guard = node.read();
+                let nd = node.read();
                 let mut cache = NodeCache::new();
-                
-                cache.element_name = Some(node_guard.get_tag_name().to_string());
-                cache.id = node_guard.get_attribute("id");
-                
-                if let Some(class_attr) = node_guard.get_attribute("class") {
-                    cache.classes = class_attr
-                        .split_whitespace()
-                        .map(|s| s.to_string())
-                        .collect();
+                cache.element_name = Some(nd.get_tag_name().to_string());
+                cache.id = nd.get_attribute("id");
+                if let Some(class_attr) = nd.get_attribute("class") {
+                    cache.classes = class_attr.split_whitespace().map(|s| s.to_string()).collect();
                 }
-                
-                cache.attributes = node_guard.get_all_attributes();
                 cache.children = document.get_children(node_id);
                 cache.parent = document.get_parent(node_id);
-                
                 self.node_cache.insert(node_id, cache);
             } else {
                 self.node_cache.insert(node_id, NodeCache::new());
             }
         }
-        
         self.node_cache.get(&node_id).unwrap()
     }
 
@@ -878,12 +631,12 @@ impl SelectorMatcher {
         match &attribute.operator {
             AttributeOperator::Exists => attributes.contains_key(&attribute.name),
             AttributeOperator::Equal => {
-                if let Some(expected_value) = &attribute.value {
-                    if let Some(actual_value) = attributes.get(&attribute.name) {
+                if let Some(expected) = &attribute.value {
+                    if let Some(actual) = attributes.get(&attribute.name) {
                         if attribute.case_insensitive {
-                            actual_value.to_lowercase() == expected_value.to_lowercase()
+                            actual.to_lowercase() == expected.to_lowercase()
                         } else {
-                            actual_value == expected_value
+                            actual == expected
                         }
                     } else {
                         false
@@ -893,13 +646,13 @@ impl SelectorMatcher {
                 }
             }
             AttributeOperator::Contains => {
-                if let Some(expected_value) = &attribute.value {
-                    if let Some(actual_value) = attributes.get(&attribute.name) {
-                        let values: HashSet<&str> = actual_value.split_whitespace().collect();
+                if let Some(expected) = &attribute.value {
+                    if let Some(actual) = attributes.get(&attribute.name) {
+                        let vals: HashSet<&str> = actual.split_whitespace().collect();
                         if attribute.case_insensitive {
-                            values.iter().any(|v| v.to_lowercase() == expected_value.to_lowercase())
+                            vals.iter().any(|v| v.to_lowercase() == expected.to_lowercase())
                         } else {
-                            values.contains(expected_value.as_str())
+                            vals.contains(expected.as_str())
                         }
                     } else {
                         false
@@ -909,14 +662,14 @@ impl SelectorMatcher {
                 }
             }
             AttributeOperator::DashMatch => {
-                if let Some(expected_value) = &attribute.value {
-                    if let Some(actual_value) = attributes.get(&attribute.name) {
+                if let Some(expected) = &attribute.value {
+                    if let Some(actual) = attributes.get(&attribute.name) {
                         if attribute.case_insensitive {
-                            let actual_lower = actual_value.to_lowercase();
-                            let expected_lower = expected_value.to_lowercase();
-                            actual_lower == expected_lower || actual_lower.starts_with(&format!("{}-", expected_lower))
+                            let al = actual.to_lowercase();
+                            let el = expected.to_lowercase();
+                            al == el || al.starts_with(&format!("{}-", el))
                         } else {
-                            actual_value == expected_value || actual_value.starts_with(&format!("{}-", expected_value))
+                            actual == expected || actual.starts_with(&format!("{}-", expected))
                         }
                     } else {
                         false
@@ -926,12 +679,12 @@ impl SelectorMatcher {
                 }
             }
             AttributeOperator::StartsWith => {
-                if let Some(expected_value) = &attribute.value {
-                    if let Some(actual_value) = attributes.get(&attribute.name) {
+                if let Some(expected) = &attribute.value {
+                    if let Some(actual) = attributes.get(&attribute.name) {
                         if attribute.case_insensitive {
-                            actual_value.to_lowercase().starts_with(&expected_value.to_lowercase())
+                            actual.to_lowercase().starts_with(&expected.to_lowercase())
                         } else {
-                            actual_value.starts_with(expected_value)
+                            actual.starts_with(expected)
                         }
                     } else {
                         false
@@ -941,12 +694,12 @@ impl SelectorMatcher {
                 }
             }
             AttributeOperator::EndsWith => {
-                if let Some(expected_value) = &attribute.value {
-                    if let Some(actual_value) = attributes.get(&attribute.name) {
+                if let Some(expected) = &attribute.value {
+                    if let Some(actual) = attributes.get(&attribute.name) {
                         if attribute.case_insensitive {
-                            actual_value.to_lowercase().ends_with(&expected_value.to_lowercase())
+                            actual.to_lowercase().ends_with(&expected.to_lowercase())
                         } else {
-                            actual_value.ends_with(expected_value)
+                            actual.ends_with(expected)
                         }
                     } else {
                         false
@@ -956,12 +709,12 @@ impl SelectorMatcher {
                 }
             }
             AttributeOperator::Substring => {
-                if let Some(expected_value) = &attribute.value {
-                    if let Some(actual_value) = attributes.get(&attribute.name) {
+                if let Some(expected) = &attribute.value {
+                    if let Some(actual) = attributes.get(&attribute.name) {
                         if attribute.case_insensitive {
-                            actual_value.to_lowercase().contains(&expected_value.to_lowercase())
+                            actual.to_lowercase().contains(&expected.to_lowercase())
                         } else {
-                            actual_value.contains(expected_value)
+                            actual.contains(expected)
                         }
                     } else {
                         false
@@ -978,114 +731,87 @@ impl SelectorMatcher {
             PseudoClass::Root => document.get_parent(node_id).is_none(),
             PseudoClass::Empty => {
                 let children = document.get_children(node_id);
-                children.is_empty() || children.iter().all(|&child_id| {
-                    if let Some(child_node) = document.get_node(child_id) {
-                        let child = child_node.read();
-                        child.is_text_node() && child.get_text_content().trim().is_empty()
+                children.is_empty() || children.iter().all(|&cid| {
+                    if let Some(child) = document.get_node(cid) {
+                        child.read().get_text_content().trim().is_empty()
                     } else {
                         true
                     }
                 })
             }
             PseudoClass::FirstChild => {
-                if let Some(parent_id) = document.get_parent(node_id) {
-                    let siblings = document.get_children(parent_id);
-                    siblings.first() == Some(&node_id)
-                } else {
-                    false
-                }
+                document.get_parent(node_id)
+                    .map_or(false, |pid| document.get_children(pid).first() == Some(&node_id))
             }
             PseudoClass::LastChild => {
-                if let Some(parent_id) = document.get_parent(node_id) {
-                    let siblings = document.get_children(parent_id);
-                    siblings.last() == Some(&node_id)
-                } else {
-                    false
-                }
+                document.get_parent(node_id)
+                    .map_or(false, |pid| document.get_children(pid).last() == Some(&node_id))
             }
             PseudoClass::OnlyChild => {
-                if let Some(parent_id) = document.get_parent(node_id) {
-                    let siblings = document.get_children(parent_id);
-                    siblings.len() == 1 && siblings[0] == node_id
-                } else {
-                    false
-                }
+                document.get_parent(node_id).map_or(false, |pid| {
+                    let sib = document.get_children(pid);
+                    sib.len() == 1 && sib[0] == node_id
+                })
             }
             PseudoClass::NthChild(pattern) => {
-                if let Some(parent_id) = document.get_parent(node_id) {
-                    let siblings = document.get_children(parent_id);
-                    if let Some(position) = siblings.iter().position(|&id| id == node_id) {
-                        pattern.matches((position + 1) as i32)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+                document.get_parent(node_id).map_or(false, |pid| {
+                    document.get_children(pid)
+                        .iter()
+                        .position(|&id| id == node_id)
+                        .map(|i| pattern.matches((i+1) as i32))
+                        .unwrap_or(false)
+                })
             }
             PseudoClass::NthLastChild(pattern) => {
-                if let Some(parent_id) = document.get_parent(node_id) {
-                    let siblings = document.get_children(parent_id);
-                    if let Some(position) = siblings.iter().position(|&id| id == node_id) {
-                        let last_position = siblings.len() - position;
-                        pattern.matches(last_position as i32)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+                document.get_parent(node_id).map_or(false, |pid| {
+                    let sib = document.get_children(pid);
+                    sib.iter()
+                        .position(|&id| id == node_id)
+                        .map(|i| {
+                            let pos = sib.len() - i;
+                            pattern.matches(pos as i32)
+                        })
+                        .unwrap_or(false)
+                })
             }
-            PseudoClass::Not(ref inner_selector) => {
-                !self.matches_simple_selector(inner_selector, node_id, document)
+            PseudoClass::Not(inner) => {
+                !self.matches_simple_selector(inner, node_id, document)
             }
             _ => false,
         }
     }
 
     fn matches_descendant(&self, selector: &ComplexSelector, mut node_id: NodeId, document: &Document) -> bool {
-        while let Some(parent_id) = document.get_parent(node_id) {
-            if self.matches_complex_selector(selector, parent_id, document) {
+        while let Some(pid) = document.get_parent(node_id) {
+            if self.matches_complex_selector(selector, pid, document) {
                 return true;
             }
-            node_id = parent_id;
+            node_id = pid;
         }
         false
     }
 
     fn matches_child(&self, selector: &ComplexSelector, node_id: NodeId, document: &Document) -> bool {
-        if let Some(parent_id) = document.get_parent(node_id) {
-            self.matches_complex_selector(selector, parent_id, document)
-        } else {
-            false
-        }
+        document.get_parent(node_id)
+            .map_or(false, |pid| self.matches_complex_selector(selector, pid, document))
     }
 
     fn matches_next_sibling(&self, selector: &ComplexSelector, node_id: NodeId, document: &Document) -> bool {
-        if let Some(parent_id) = document.get_parent(node_id) {
-            let siblings = document.get_children(parent_id);
-            if let Some(position) = siblings.iter().position(|&id| id == node_id) {
-                if position > 0 {
-                    let prev_sibling = siblings[position - 1];
-                    return self.matches_complex_selector(selector, prev_sibling, document);
-                }
-            }
-        }
-        false
+        document.get_parent(node_id).map_or(false, |pid| {
+            let sib = document.get_children(pid);
+            sib.iter().position(|&id| id == node_id).map_or(false, |i| {
+                i > 0 && self.matches_complex_selector(selector, sib[i-1], document)
+            })
+        })
     }
 
     fn matches_subsequent_sibling(&self, selector: &ComplexSelector, node_id: NodeId, document: &Document) -> bool {
-        if let Some(parent_id) = document.get_parent(node_id) {
-            let siblings = document.get_children(parent_id);
-            if let Some(position) = siblings.iter().position(|&id| id == node_id) {
-                for &sibling_id in siblings.iter().take(position) {
-                    if self.matches_complex_selector(selector, sibling_id, document) {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        document.get_parent(node_id).map_or(false, |pid| {
+            let sib = document.get_children(pid);
+            sib.iter().position(|&id| id == node_id).map_or(false, |i| {
+                sib.iter().take(i).any(|&sid| self.matches_complex_selector(selector, sid, document))
+            })
+        })
     }
 
     pub fn invalidate_cache(&self) {
@@ -1095,14 +821,12 @@ impl SelectorMatcher {
 
     pub fn invalidate_node_cache(&self, node_id: NodeId) {
         self.node_cache.remove(&node_id);
-
-        let keys_to_remove: Vec<_> = self.match_cache
+        let keys: Vec<_> = self.match_cache
             .iter()
-            .filter(|entry| entry.key().1 == node_id)
-            .map(|entry| entry.key().clone())
+            .filter(|e| e.key().1 == node_id)
+            .map(|e| e.key().clone())
             .collect();
-        
-        for key in keys_to_remove {
+        for key in keys {
             self.match_cache.remove(&key);
         }
     }
@@ -1121,44 +845,53 @@ impl SelectorEngine {
         }
     }
 
-    pub fn parse_selector(&self, input: &str) -> Result<Selector> {
-        if let Some(cached) = self.cached_selectors.get(input) {
-            return Ok(cached.clone());
+    fn collect_all_nodes(document: &Document) -> Vec<NodeId> {
+        let mut nodes = Vec::new();
+        if let Some(root) = document.get_root_node() {
+            let mut stack = vec![root];
+            while let Some(n) = stack.pop() {
+                nodes.push(n);
+                for &c in &document.get_children(n) {
+                    stack.push(c);
+                }
+            }
         }
+        nodes
+    }
 
-        let selector = Selector::parse(input)?;
-        self.cached_selectors.insert(input.to_string(), selector.clone());
-        Ok(selector)
+    pub fn parse_selector(&self, input: &str) -> Result<Selector> {
+        if let Some(sel) = self.cached_selectors.get(input) {
+            return Ok(sel.clone());
+        }
+        let sel = Selector::parse(input)?;
+        self.cached_selectors.insert(input.to_string(), sel.clone());
+        Ok(sel)
     }
 
     pub fn matches(&self, selector_text: &str, node_id: NodeId, document: &Document) -> Result<bool> {
-        let selector = self.parse_selector(selector_text)?;
-        Ok(self.matcher.matches(&selector, node_id, document))
+        let sel = self.parse_selector(selector_text)?;
+        Ok(self.matcher.matches(&sel, node_id, document))
     }
 
     pub fn query_selector(&self, selector_text: &str, document: &Document) -> Result<Option<NodeId>> {
-        let selector = self.parse_selector(selector_text)?;
-        
-        for node_id in document.iter_nodes() {
-            if self.matcher.matches(&selector, node_id, document) {
+        let sel = self.parse_selector(selector_text)?;
+        for node_id in Self::collect_all_nodes(document) {
+            if self.matcher.matches(&sel, node_id, document) {
                 return Ok(Some(node_id));
             }
         }
-        
         Ok(None)
     }
 
     pub fn query_selector_all(&self, selector_text: &str, document: &Document) -> Result<Vec<NodeId>> {
-        let selector = self.parse_selector(selector_text)?;
-        let mut results = Vec::new();
-        
-        for node_id in document.iter_nodes() {
-            if self.matcher.matches(&selector, node_id, document) {
-                results.push(node_id);
+        let sel = self.parse_selector(selector_text)?;
+        let mut res = Vec::new();
+        for node_id in Self::collect_all_nodes(document) {
+            if self.matcher.matches(&sel, node_id, document) {
+                res.push(node_id);
             }
         }
-        
-        Ok(results)
+        Ok(res)
     }
 
     pub fn invalidate_cache(&self) {

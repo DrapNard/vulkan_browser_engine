@@ -27,16 +27,11 @@ jobs:
         toolchain: ${{ matrix.rust }}
         components: rustfmt, clippy
     
-    - name: Install Vulkan SDK (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        sudo apt update
-        sudo apt install -y vulkan-tools libvulkan-dev vulkan-validationlayers-dev
-    
-    - name: Install Vulkan SDK (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        brew install vulkan-headers vulkan-loader
+    - name: Install Vulkan SDK
+      uses: humbletim/install-vulkan-sdk@v1.2
+      with:
+        version: 1.4.309.0
+        cache: true
     
     - name: Cache cargo registry
       uses: actions/cache@v3

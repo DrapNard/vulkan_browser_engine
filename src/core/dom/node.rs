@@ -5,7 +5,6 @@ use smallvec::SmallVec;
 use serde::{Serialize, Deserialize};
 
 use super::document::NodeId;
-use crate::core::css::CSSStyleDeclaration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeType {
@@ -44,21 +43,19 @@ impl AttributeMap {
     }
 
     pub fn get(&self, name: &str) -> Option<&String> {
-        self.map.iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value)
+        self.map.iter().find(|(k, _)| k == name).map(|(_, v)| v)
     }
 
     pub fn set(&mut self, name: String, value: String) {
-        if let Some(existing) = self.map.iter_mut().find(|(key, _)| *key == name) {
-            existing.1 = value;
+        if let Some((_, v)) = self.map.iter_mut().find(|(k, _)| k == &name) {
+            *v = value;
         } else {
             self.map.push((name, value));
         }
     }
 
     pub fn remove(&mut self, name: &str) -> Option<String> {
-        if let Some(pos) = self.map.iter().position(|(key, _)| key == name) {
+        if let Some(pos) = self.map.iter().position(|(k, _)| k == name) {
             Some(self.map.remove(pos).1)
         } else {
             None
@@ -66,15 +63,15 @@ impl AttributeMap {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        self.map.iter().any(|(key, _)| key == name)
+        self.map.iter().any(|(k, _)| k == name)
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.map.iter().map(|(key, _)| key)
+        self.map.iter().map(|(k, _)| k)
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (&String, &String)> {
-        self.map.iter().map(|(key, value)| (key, value))
+        self.map.iter().map(|(k, v)| (k, v))
     }
 
     pub fn len(&self) -> usize {
@@ -91,14 +88,14 @@ impl AttributeMap {
     }
 
     pub fn set_namespaced(&mut self, namespace: String, name: String, value: String) {
-        let full_name = format!("{}:{}", namespace, name);
-        self.namespace_map.insert(full_name.clone(), namespace);
-        self.set(full_name, value);
+        let full = format!("{}:{}", namespace, name);
+        self.namespace_map.insert(full.clone(), namespace);
+        self.set(full, value);
     }
 
     pub fn get_namespaced(&self, namespace: &str, name: &str) -> Option<&String> {
-        let full_name = format!("{}:{}", namespace, name);
-        self.get(&full_name)
+        let full = format!("{}:{}", namespace, name);
+        self.get(&full)
     }
 }
 
@@ -123,14 +120,12 @@ impl ComputedStyle {
     }
 
     pub fn get_property(&self, name: &str) -> Option<&String> {
-        self.properties.iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value)
+        self.properties.iter().find(|(k, _)| k == name).map(|(_, v)| v)
     }
 
     pub fn set_property(&mut self, name: String, value: String) {
-        if let Some(existing) = self.properties.iter_mut().find(|(key, _)| *key == name) {
-            existing.1 = value;
+        if let Some((_, v)) = self.properties.iter_mut().find(|(k, _)| k == &name) {
+            *v = value;
         } else {
             self.properties.push((name, value));
         }
@@ -139,9 +134,9 @@ impl ComputedStyle {
 
     pub fn inherit_from(&mut self, parent: Arc<ComputedStyle>) {
         self.parent_style = Some(parent.clone());
-        
-        for property in &self.inherited_properties {
-            if let Some(value) = parent.get_property(property) {
+        let inherited = self.inherited_properties.clone();
+        for property in inherited {
+            if let Some(value) = parent.get_property(&property) {
                 self.set_property(property.clone(), value.clone());
             }
         }
@@ -158,37 +153,6 @@ impl ComputedStyle {
     pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct LayoutData {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub margin_top: f32,
-    pub margin_right: f32,
-    pub margin_bottom: f32,
-    pub margin_left: f32,
-    pub padding_top: f32,
-    pub padding_right: f32,
-    pub padding_bottom: f32,
-    pub padding_left: f32,
-    pub border_top: f32,
-    pub border_right: f32,
-    pub border_bottom: f32,
-    pub border_left: f32,
-    pub content_width: f32,
-    pub content_height: f32,
-    pub is_positioned: bool,
-    pub z_index: i32,
-    pub display: DisplayType,
-    pub position: PositionType,
-    pub float: FloatType,
-    pub clear: ClearType,
-    pub overflow_x: OverflowType,
-    pub overflow_y: OverflowType,
-    pub is_dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +199,37 @@ pub enum OverflowType {
     Hidden,
     Scroll,
     Auto,
+}
+
+#[derive(Debug, Clone)]
+pub struct LayoutData {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub margin_top: f32,
+    pub margin_right: f32,
+    pub margin_bottom: f32,
+    pub margin_left: f32,
+    pub padding_top: f32,
+    pub padding_right: f32,
+    pub padding_bottom: f32,
+    pub padding_left: f32,
+    pub border_top: f32,
+    pub border_right: f32,
+    pub border_bottom: f32,
+    pub border_left: f32,
+    pub content_width: f32,
+    pub content_height: f32,
+    pub is_positioned: bool,
+    pub z_index: i32,
+    pub display: DisplayType,
+    pub position: PositionType,
+    pub float: FloatType,
+    pub clear: ClearType,
+    pub overflow_x: OverflowType,
+    pub overflow_y: OverflowType,
+    pub is_dirty: bool,
 }
 
 impl Default for LayoutData {
@@ -325,7 +320,6 @@ impl LayoutData {
     }
 }
 
-#[derive(Debug)]
 pub struct Node {
     node_id: NodeId,
     node_type: NodeType,
@@ -499,20 +493,17 @@ impl Node {
 
     pub fn set_attribute(&mut self, name: &str, value: &str) {
         self.attributes.set(name.to_string(), value.to_string());
-        
         if self.node_type == NodeType::Element {
             self.invalidate_style();
         }
     }
 
     pub fn remove_attribute(&mut self, name: &str) -> Option<String> {
-        let result = self.attributes.remove(name);
-        
-        if result.is_some() && self.node_type == NodeType::Element {
+        let r = self.attributes.remove(name);
+        if r.is_some() && self.node_type == NodeType::Element {
             self.invalidate_style();
         }
-        
-        result
+        r
     }
 
     pub fn has_attribute(&self, name: &str) -> bool {
@@ -543,23 +534,23 @@ impl Node {
         self.layout_data.write().mark_dirty();
     }
 
-    pub fn add_event_listener<F>(&mut self, event_type: String, listener: F)
+    pub fn add_event_listener<F>(&mut self, event: String, listener: F)
     where
         F: Fn() + Send + Sync + 'static,
     {
         self.event_listeners
-            .entry(event_type)
+            .entry(event)
             .or_insert_with(Vec::new)
             .push(Arc::new(listener));
     }
 
-    pub fn remove_event_listeners(&mut self, event_type: &str) {
-        self.event_listeners.remove(event_type);
+    pub fn remove_event_listeners(&mut self, event: &str) {
+        self.event_listeners.remove(event);
     }
 
-    pub fn dispatch_event(&self, event_type: &str) {
-        if let Some(listeners) = self.event_listeners.get(event_type) {
-            for listener in listeners {
+    pub fn dispatch_event(&self, event: &str) {
+        if let Some(list) = self.event_listeners.get(event) {
+            for listener in list {
                 listener();
             }
         }
@@ -569,48 +560,48 @@ impl Node {
         self.namespace_uri.as_ref()
     }
 
-    pub fn set_namespace_uri(&mut self, namespace_uri: Option<String>) {
-        self.namespace_uri = namespace_uri;
+    pub fn set_namespace_uri(&mut self, ns: Option<String>) {
+        self.namespace_uri = ns;
     }
 
     pub fn get_prefix(&self) -> Option<&String> {
         self.prefix.as_ref()
     }
 
-    pub fn set_prefix(&mut self, prefix: Option<String>) {
-        self.prefix = prefix;
+    pub fn set_prefix(&mut self, p: Option<String>) {
+        self.prefix = p;
     }
 
     pub fn get_base_uri(&self) -> Option<&String> {
         self.base_uri.as_ref()
     }
 
-    pub fn set_base_uri(&mut self, base_uri: Option<String>) {
-        self.base_uri = base_uri;
+    pub fn set_base_uri(&mut self, b: Option<String>) {
+        self.base_uri = b;
     }
 
     pub fn get_owner_document(&self) -> Option<NodeId> {
         self.owner_document
     }
 
-    pub fn set_owner_document(&mut self, document: Option<NodeId>) {
-        self.owner_document = document;
+    pub fn set_owner_document(&mut self, doc: Option<NodeId>) {
+        self.owner_document = doc;
     }
 
     pub fn is_connected(&self) -> bool {
         self.is_connected
     }
 
-    pub fn set_connected(&mut self, connected: bool) {
-        self.is_connected = connected;
+    pub fn set_connected(&mut self, c: bool) {
+        self.is_connected = c;
     }
 
     pub fn get_shadow_root(&self) -> Option<NodeId> {
         self.shadow_root
     }
 
-    pub fn set_shadow_root(&mut self, shadow_root: Option<NodeId>) {
-        self.shadow_root = shadow_root;
+    pub fn set_shadow_root(&mut self, root: Option<NodeId>) {
+        self.shadow_root = root;
     }
 
     pub fn get_assigned_slot(&self) -> Option<NodeId> {
@@ -641,59 +632,50 @@ impl Node {
         self.node_type == NodeType::DocumentType
     }
 
-    pub fn matches_tag(&self, tag_name: &str) -> bool {
-        self.tag_name.eq_ignore_ascii_case(tag_name)
+    pub fn matches_tag(&self, tag: &str) -> bool {
+        self.tag_name.eq_ignore_ascii_case(tag)
     }
 
     pub fn matches_id(&self, id: &str) -> bool {
-        self.get_attribute("id")
-            .map(|attr_id| attr_id == id)
-            .unwrap_or(false)
+        self.get_attribute("id").map(|v| v == id).unwrap_or(false)
     }
 
-    pub fn matches_class(&self, class_name: &str) -> bool {
+    pub fn matches_class(&self, class: &str) -> bool {
         self.get_attribute("class")
-            .map(|class_attr| {
-                class_attr.split_whitespace().any(|class| class == class_name)
-            })
+            .map(|c| c.split_whitespace().any(|s| s == class))
             .unwrap_or(false)
     }
 
     pub fn get_classes(&self) -> Vec<String> {
         self.get_attribute("class")
-            .map(|class_attr| {
-                class_attr.split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect()
-            })
+            .map(|c| c.split_whitespace().map(str::to_string).collect())
             .unwrap_or_default()
     }
 
-    pub fn add_class(&mut self, class_name: &str) {
-        let mut classes = self.get_classes();
-        if !classes.contains(&class_name.to_string()) {
-            classes.push(class_name.to_string());
-            self.set_attribute("class", &classes.join(" "));
+    pub fn add_class(&mut self, class: &str) {
+        let mut list = self.get_classes();
+        if !list.contains(&class.to_string()) {
+            list.push(class.to_string());
+            self.set_attribute("class", &list.join(" "));
         }
     }
 
-    pub fn remove_class(&mut self, class_name: &str) {
-        let mut classes = self.get_classes();
-        classes.retain(|class| class != class_name);
-        
-        if classes.is_empty() {
+    pub fn remove_class(&mut self, class: &str) {
+        let mut list = self.get_classes();
+        list.retain(|c| c != class);
+        if list.is_empty() {
             self.remove_attribute("class");
         } else {
-            self.set_attribute("class", &classes.join(" "));
+            self.set_attribute("class", &list.join(" "));
         }
     }
 
-    pub fn toggle_class(&mut self, class_name: &str) -> bool {
-        if self.matches_class(class_name) {
-            self.remove_class(class_name);
+    pub fn toggle_class(&mut self, class: &str) -> bool {
+        if self.matches_class(class) {
+            self.remove_class(class);
             false
         } else {
-            self.add_class(class_name);
+            self.add_class(class);
             true
         }
     }
@@ -703,8 +685,7 @@ impl Node {
     }
 
     pub fn get_custom_data<T: std::any::Any + Send + Sync>(&self, key: &str) -> Option<&T> {
-        self.custom_data.get(key)
-            .and_then(|data| data.downcast_ref::<T>())
+        self.custom_data.get(key).and_then(|b| b.downcast_ref::<T>())
     }
 
     pub fn remove_custom_data(&mut self, key: &str) -> Option<Box<dyn std::any::Any + Send + Sync>> {
@@ -712,7 +693,7 @@ impl Node {
     }
 
     pub fn clone_node(&self, deep: bool) -> Self {
-        let mut cloned = Self {
+        let cloned = Self {
             node_id: NodeId::new(),
             node_type: self.node_type,
             tag_name: self.tag_name.clone(),
@@ -720,7 +701,7 @@ impl Node {
             attributes: self.attributes.clone(),
             computed_style: Arc::new(RwLock::new(ComputedStyle::new())),
             layout_data: Arc::new(RwLock::new(LayoutData::default())),
-            event_listeners: HashMap::new(),
+            event_listeners: if deep { Vec::new().into_iter().collect() } else { self.event_listeners.clone() },
             custom_data: HashMap::new(),
             namespace_uri: self.namespace_uri.clone(),
             prefix: self.prefix.clone(),
@@ -730,11 +711,6 @@ impl Node {
             shadow_root: None,
             assigned_slot: None,
         };
-
-        if !deep {
-            cloned.event_listeners = self.event_listeners.clone();
-        }
-
         cloned
     }
 
@@ -744,17 +720,37 @@ impl Node {
         size += self.text_content.capacity();
         size += self.attributes.map.capacity() * std::mem::size_of::<(String, String)>();
         size += self.attributes.namespace_map.capacity() * std::mem::size_of::<(String, String)>();
-        size += self.event_listeners.capacity() * std::mem::size_of::<(String, Vec<Arc<dyn Fn() + Send + Sync>>)>();
-        size += self.custom_data.capacity() * std::mem::size_of::<(String, Box<dyn std::any::Any + Send + Sync>)>();
-        
-        for (key, value) in &self.attributes.map {
-            size += key.capacity() + value.capacity();
+        size += self.event_listeners.capacity() * std::mem::size_of::<Vec<Arc<dyn Fn() + Send + Sync>>>();
+        size += self.custom_data.capacity() * std::mem::size_of::<Box<dyn std::any::Any + Send + Sync>>();
+        for (k, v) in &self.attributes.map {
+            size += k.capacity() + v.capacity();
         }
-        
-        for (key, _) in &self.custom_data {
-            size += key.capacity();
+        for k in self.custom_data.keys() {
+            size += k.capacity();
         }
-        
         size
+    }
+}
+
+impl std::fmt::Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Node")
+            .field("node_id", &self.node_id)
+            .field("node_type", &self.node_type)
+            .field("tag_name", &self.tag_name)
+            .field("text_content", &self.text_content)
+            .field("attributes", &self.attributes)
+            .field("computed_style", &"<ComputedStyle>")
+            .field("layout_data", &"<LayoutData>")
+            .field("event_listeners_count", &self.event_listeners.len())
+            .field("custom_data_keys", &self.custom_data.keys().collect::<Vec<_>>())
+            .field("namespace_uri", &self.namespace_uri)
+            .field("prefix", &self.prefix)
+            .field("base_uri", &self.base_uri)
+            .field("owner_document", &self.owner_document)
+            .field("is_connected", &self.is_connected)
+            .field("shadow_root", &self.shadow_root)
+            .field("assigned_slot", &self.assigned_slot)
+            .finish()
     }
 }

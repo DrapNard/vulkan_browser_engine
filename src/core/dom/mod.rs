@@ -2,13 +2,20 @@ pub mod document;
 pub mod element;
 pub mod node;
 
-pub use document::{Document, DocumentError, DocumentMetadata, DocumentReadyState, NodeId, MutationRecord, MutationType, InlineScript, NodeType};
+pub use document::{
+    Document, DocumentError, DocumentMetadata, DocumentReadyState, NodeId, MutationRecord,
+    MutationType, InlineScript,
+};
 pub use element::{Element, ElementError, DOMRect, AnimationOptions, AnimationId, ShadowRootInit, ShadowRootMode};
-pub use node::{Node, AttributeMap, ComputedStyle, LayoutData, DisplayType, PositionType, FloatType, ClearType, OverflowType};
+pub use node::{
+    Node, NodeType, AttributeMap, ComputedStyle, LayoutData, DisplayType, PositionType, FloatType,
+    ClearType, OverflowType,
+};
 
 use std::sync::Arc;
 use parking_lot::RwLock;
 use thiserror::Error;
+use crate::core::dom::document::NodeType as DocumentNodeType;
 
 #[derive(Error, Debug)]
 pub enum DOMError {
@@ -77,7 +84,6 @@ impl DOMImplementation {
 
     pub fn has_feature(&self, feature: &str, _version: &str) -> bool {
         let support = self.feature_support.read();
-        
         match feature.to_lowercase().as_str() {
             "html" => support.html,
             "xml" => support.xml,
@@ -96,51 +102,51 @@ impl DOMImplementation {
         }
     }
 
-    pub fn create_document_type(&self, qualified_name: &str, _public_id: &str, _system_id: &str) -> Result<Node> {
+    pub fn create_document_type(
+        &self,
+        qualified_name: &str,
+        _public_id: &str,
+        _system_id: &str,
+    ) -> Result<Node> {
         Ok(Node::new_doctype(qualified_name.to_string(), NodeId::new()))
     }
 
-    pub fn create_document(&self, _namespace_uri: Option<&str>, qualified_name: Option<&str>) -> Result<Document> {
-        let mut document = Document::new();
-        
+    pub fn create_document(
+        &self,
+        _namespace_uri: Option<&str>,
+        qualified_name: Option<&str>,
+    ) -> Result<Document> {
+        let document = Document::new();
         if let Some(name) = qualified_name {
-            let root_element_id = document.create_node(NodeType::Element, name.to_string())?;
-            if let Some(root_node_id) = document.get_root_node() {
-                document.append_child(root_node_id, root_element_id)?;
+            let root_el = document.create_node(DocumentNodeType::Element, name.to_string())?;
+            if let Some(root_id) = document.get_root_node() {
+                document.append_child(root_id, root_el)?;
             }
         }
-        
         Ok(document)
     }
 
     pub fn create_html_document(&self, title: Option<&str>) -> Result<Document> {
-        let mut document = Document::new();
-        
-        let html_id = document.create_node(NodeType::Element, "html".to_string())?;
-        let head_id = document.create_node(NodeType::Element, "head".to_string())?;
-        let body_id = document.create_node(NodeType::Element, "body".to_string())?;
-        
-        if let Some(title_text) = title {
-            let title_id = document.create_node(NodeType::Element, "title".to_string())?;
-            let title_text_id = document.create_node(NodeType::Text, title_text.to_string())?;
-            
-            document.append_child(title_id, title_text_id)?;
+        let document = Document::new();
+        let html_id = document.create_node(DocumentNodeType::Element, "html".into())?;
+        let head_id = document.create_node(DocumentNodeType::Element, "head".into())?;
+        let body_id = document.create_node(DocumentNodeType::Element, "body".into())?;
+        if let Some(text) = title {
+            let title_id = document.create_node(DocumentNodeType::Element, "title".into())?;
+            let text_id = document.create_node(DocumentNodeType::Text, text.to_string())?;
+            document.append_child(title_id, text_id)?;
             document.append_child(head_id, title_id)?;
-            document.set_title(title_text.to_string());
+            document.set_title(text.to_string());
         }
-        
         document.append_child(html_id, head_id)?;
         document.append_child(html_id, body_id)?;
-        
-        if let Some(root_node_id) = document.get_root_node() {
-            document.append_child(root_node_id, html_id)?;
+        if let Some(root_id) = document.get_root_node() {
+            document.append_child(root_id, html_id)?;
         }
-        
         Ok(document)
     }
 }
 
-#[derive(Debug)]
 pub struct TreeWalker {
     root: NodeId,
     what_to_show: u32,
@@ -158,7 +164,7 @@ impl TreeWalker {
         }
     }
 
-    pub fn with_filter<F>(mut self, filter: F) -> Self 
+    pub fn with_filter<F>(mut self, filter: F) -> Self
     where
         F: Fn(NodeId) -> bool + Send + Sync + 'static,
     {
@@ -179,92 +185,109 @@ impl TreeWalker {
     }
 
     pub fn parent_node(&mut self, document: &Document) -> Option<NodeId> {
-        let parent = document.get_parent(self.current_node)?;
-        
-        if self.accepts_node(parent) {
-            self.current_node = parent;
-            Some(parent)
+        let p = document.get_parent(self.current_node)?;
+        if self.accepts_node(p) {
+            self.current_node = p;
+            Some(p)
         } else {
             None
         }
     }
 
     pub fn first_child(&mut self, document: &Document) -> Option<NodeId> {
-        let children = document.get_children(self.current_node);
-        
-        for child in children {
-            if self.accepts_node(child) {
-                self.current_node = child;
-                return Some(child);
+        for &c in &document.get_children(self.current_node) {
+            if self.accepts_node(c) {
+                self.current_node = c;
+                return Some(c);
             }
         }
-        
         None
     }
 
     pub fn last_child(&mut self, document: &Document) -> Option<NodeId> {
-        let children = document.get_children(self.current_node);
-        
-        for child in children.iter().rev() {
-            if self.accepts_node(*child) {
-                self.current_node = *child;
-                return Some(*child);
+        for &c in document.get_children(self.current_node).iter().rev() {
+            if self.accepts_node(c) {
+                self.current_node = c;
+                return Some(c);
             }
         }
-        
         None
     }
 
     pub fn next_sibling(&mut self, document: &Document) -> Option<NodeId> {
         let parent = document.get_parent(self.current_node)?;
         let siblings = document.get_children(parent);
-        let current_index = siblings.iter().position(|&id| id == self.current_node)?;
-        
-        for sibling in siblings.iter().skip(current_index + 1) {
-            if self.accepts_node(*sibling) {
-                self.current_node = *sibling;
-                return Some(*sibling);
+        let idx = siblings.iter().position(|&id| id == self.current_node)?;
+        for &sib in &siblings[idx + 1..] {
+            if self.accepts_node(sib) {
+                self.current_node = sib;
+                return Some(sib);
             }
         }
-        
         None
     }
 
     pub fn previous_sibling(&mut self, document: &Document) -> Option<NodeId> {
         let parent = document.get_parent(self.current_node)?;
         let siblings = document.get_children(parent);
-        let current_index = siblings.iter().position(|&id| id == self.current_node)?;
-        
-        for sibling in siblings.iter().take(current_index).rev() {
-            if self.accepts_node(*sibling) {
-                self.current_node = *sibling;
-                return Some(*sibling);
+        let idx = siblings.iter().position(|&id| id == self.current_node)?;
+        for &sib in siblings[..idx].iter().rev() {
+            if self.accepts_node(sib) {
+                self.current_node = sib;
+                return Some(sib);
             }
         }
-        
         None
     }
 
-    pub fn next_node(&mut self, _document: &Document) -> Option<NodeId> {
-        // Simplified implementation
+    pub fn next_node(&mut self, document: &Document) -> Option<NodeId> {
+        if let Some(c) = self.first_child(document) { return Some(c); }
+        if let Some(s) = self.next_sibling(document) { return Some(s); }
+        let mut curr = self.current_node;
+        while let Some(p) = document.get_parent(curr) {
+            if p == self.root { break; }
+            self.current_node = p;
+            if let Some(sib) = self.next_sibling(document) {
+                return Some(sib);
+            }
+            curr = p;
+        }
         None
     }
 
-    pub fn previous_node(&mut self, _document: &Document) -> Option<NodeId> {
-        // Simplified implementation  
+    pub fn previous_node(&mut self, document: &Document) -> Option<NodeId> {
+        if let Some(sib) = self.previous_sibling(document) {
+            self.current_node = sib;
+            while let Some(child) = self.last_child(document) {
+                let _ = child;
+            }
+            return Some(self.current_node);
+        }
+        if let Some(p) = self.parent_node(document) {
+            if p != self.root { return Some(p); }
+        }
         None
     }
 
     fn accepts_node(&self, node: NodeId) -> bool {
-        if let Some(ref filter) = self.filter {
-            filter(node)
+        if let Some(ref f) = self.filter {
+            f(node)
         } else {
             true
         }
     }
 }
 
-#[derive(Debug)]
+impl std::fmt::Debug for TreeWalker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TreeWalker")
+            .field("root", &self.root)
+            .field("what_to_show", &self.what_to_show)
+            .field("current_node", &self.current_node)
+            .finish()
+    }
+}
+
 pub struct NodeIterator {
     root: NodeId,
     what_to_show: u32,
@@ -284,7 +307,7 @@ impl NodeIterator {
         }
     }
 
-    pub fn with_filter<F>(mut self, filter: F) -> Self 
+    pub fn with_filter<F>(mut self, filter: F) -> Self
     where
         F: Fn(NodeId) -> bool + Send + Sync + 'static,
     {
@@ -300,16 +323,25 @@ impl NodeIterator {
         None
     }
 
-    pub fn detach(&mut self) {
-        
-    }
+    pub fn detach(&mut self) {}
 
     fn accepts_node(&self, node: NodeId) -> bool {
-        if let Some(ref filter) = self.filter {
-            filter(node)
+        if let Some(ref f) = self.filter {
+            f(node)
         } else {
             true
         }
+    }
+}
+
+impl std::fmt::Debug for NodeIterator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeIterator")
+            .field("root", &self.root)
+            .field("what_to_show", &self.what_to_show)
+            .field("reference_node", &self.reference_node)
+            .field("pointer_before_reference_node", &self.pointer_before_reference_node)
+            .finish()
     }
 }
 
@@ -352,8 +384,8 @@ impl DOMRange {
     pub fn set_start_before(&mut self, node: NodeId, document: &Document) -> Result<()> {
         if let Some(parent) = document.get_parent(node) {
             let children = document.get_children(parent);
-            if let Some(index) = children.iter().position(|&id| id == node) {
-                self.set_start(parent, index as u32)?;
+            if let Some(idx) = children.iter().position(|&id| id == node) {
+                self.set_start(parent, idx as u32)?;
             }
         }
         Ok(())
@@ -362,8 +394,8 @@ impl DOMRange {
     pub fn set_start_after(&mut self, node: NodeId, document: &Document) -> Result<()> {
         if let Some(parent) = document.get_parent(node) {
             let children = document.get_children(parent);
-            if let Some(index) = children.iter().position(|&id| id == node) {
-                self.set_start(parent, (index + 1) as u32)?;
+            if let Some(idx) = children.iter().position(|&id| id == node) {
+                self.set_start(parent, (idx + 1) as u32)?;
             }
         }
         Ok(())
@@ -372,8 +404,8 @@ impl DOMRange {
     pub fn set_end_before(&mut self, node: NodeId, document: &Document) -> Result<()> {
         if let Some(parent) = document.get_parent(node) {
             let children = document.get_children(parent);
-            if let Some(index) = children.iter().position(|&id| id == node) {
-                self.set_end(parent, index as u32)?;
+            if let Some(idx) = children.iter().position(|&id| id == node) {
+                self.set_end(parent, idx as u32)?;
             }
         }
         Ok(())
@@ -382,8 +414,8 @@ impl DOMRange {
     pub fn set_end_after(&mut self, node: NodeId, document: &Document) -> Result<()> {
         if let Some(parent) = document.get_parent(node) {
             let children = document.get_children(parent);
-            if let Some(index) = children.iter().position(|&id| id == node) {
-                self.set_end(parent, (index + 1) as u32)?;
+            if let Some(idx) = children.iter().position(|&id| id == node) {
+                self.set_end(parent, (idx + 1) as u32)?;
             }
         }
         Ok(())
@@ -437,9 +469,7 @@ impl DOMRange {
         self.clone()
     }
 
-    pub fn detach(&mut self) {
-        
-    }
+    pub fn detach(&mut self) {}
 
     pub fn is_point_in_range(&self, _node: NodeId, _offset: u32, _document: &Document) -> bool {
         false

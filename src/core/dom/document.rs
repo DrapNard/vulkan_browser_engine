@@ -5,7 +5,6 @@ use dashmap::DashMap;
 use smallvec::SmallVec;
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
-use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum DocumentError {
@@ -224,7 +223,6 @@ impl QueryCache {
     pub fn invalidate(&self) {
         let mut version = self.cache_version.write();
         *version += 1;
-        
         self.selector_cache.clear();
         self.id_cache.clear();
         self.class_cache.clear();
@@ -272,7 +270,7 @@ impl QueryCache {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InlineScript {
     pub content: String,
     pub script_type: String,
@@ -282,7 +280,7 @@ pub struct InlineScript {
     pub nonce: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MutationObserver {
     pub callback: Arc<dyn Fn(&[MutationRecord]) + Send + Sync>,
     pub observe_child_list: bool,
@@ -290,6 +288,18 @@ pub struct MutationObserver {
     pub observe_character_data: bool,
     pub observe_subtree: bool,
     pub attribute_filter: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for MutationObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MutationObserver")
+            .field("observe_child_list", &self.observe_child_list)
+            .field("observe_attributes", &self.observe_attributes)
+            .field("observe_character_data", &self.observe_character_data)
+            .field("observe_subtree", &self.observe_subtree)
+            .field("attribute_filter", &self.attribute_filter)
+            .finish()
+    }
 }
 
 pub struct Document {
@@ -319,23 +329,17 @@ impl Document {
 
     pub fn parse_html(&self, html: &str) -> Result<()> {
         let parse_start = std::time::Instant::now();
-        
         self.query_cache.invalidate();
-        
         let document_node_id = self.create_node(NodeType::Document, "".to_string())?;
         *self.root_node.write() = Some(document_node_id);
-
         let parser = HTMLParser::new();
         parser.parse(html, document_node_id, self)?;
-
         {
             let mut metadata = self.metadata.write();
             metadata.ready_state = DocumentReadyState::Interactive;
         }
-
         let parse_time = parse_start.elapsed();
         tracing::debug!("HTML parsing completed in {:?}", parse_time);
-
         Ok(())
     }
 
@@ -347,7 +351,6 @@ impl Document {
 
     pub fn create_node(&self, node_type: NodeType, content: String) -> Result<NodeId> {
         let node_id = NodeId::new();
-        
         let node = match node_type {
             NodeType::Element => Arc::new(RwLock::new(Node::new_element(content, node_id))),
             NodeType::Text => Arc::new(RwLock::new(Node::new_text(content, node_id))),
@@ -355,9 +358,7 @@ impl Document {
             NodeType::Document => Arc::new(RwLock::new(Node::new_document(node_id))),
             NodeType::DocumentType => Arc::new(RwLock::new(Node::new_doctype(content, node_id))),
         };
-
         self.nodes.insert(node_id, node);
-
         Ok(node_id)
     }
 
@@ -365,12 +366,10 @@ impl Document {
         if let Some(parent_node) = self.nodes.get(&parent_id) {
             parent_node.write().children.push(child_id);
         }
-
         if let Some(child_node) = self.nodes.get(&child_id) {
             child_node.write().parent = Some(parent_id);
         }
-
-        let mutation_record = MutationRecord {
+        let record = MutationRecord {
             mutation_type: MutationType::ChildList,
             target: parent_id,
             added_nodes: vec![child_id],
@@ -382,23 +381,19 @@ impl Document {
             old_value: None,
             timestamp: std::time::Instant::now(),
         };
-
-        self.record_mutation(mutation_record);
+        self.record_mutation(record);
         self.query_cache.invalidate_partial(parent_id);
-
         Ok(())
     }
 
     pub fn remove_child(&self, parent_id: NodeId, child_id: NodeId) -> Result<()> {
         if let Some(parent_node) = self.nodes.get(&parent_id) {
-            parent_node.write().children.retain(|&id| id != child_id);
+            parent_node.write().children.retain(|id| *id != child_id);
         }
-
         if let Some(child_node) = self.nodes.get(&child_id) {
             child_node.write().parent = None;
         }
-
-        let mutation_record = MutationRecord {
+        let record = MutationRecord {
             mutation_type: MutationType::ChildList,
             target: parent_id,
             added_nodes: Vec::new(),
@@ -410,66 +405,56 @@ impl Document {
             old_value: None,
             timestamp: std::time::Instant::now(),
         };
-
-        self.record_mutation(mutation_record);
+        self.record_mutation(record);
         self.query_cache.invalidate_partial(parent_id);
-
         Ok(())
     }
 
     pub fn get_element_by_id(&self, id: &str) -> Option<NodeId> {
-        if let Some(cached_result) = self.query_cache.get_by_id(id) {
-            return Some(cached_result);
+        if let Some(cached) = self.query_cache.get_by_id(id) {
+            return Some(cached);
         }
-
-        for node_entry in self.nodes.iter() {
-            let node = node_entry.value().read();
-            if let Some(element_id) = node.get_attribute("id") {
-                if element_id == id {
-                    let node_id = *node_entry.key();
+        for entry in self.nodes.iter() {
+            let node = entry.value().read();
+            if let Some(attr) = node.get_attribute("id") {
+                if attr == id {
+                    let node_id = *entry.key();
                     self.query_cache.cache_id(id, node_id);
                     return Some(node_id);
                 }
             }
         }
-
         None
     }
 
     pub fn get_elements_by_class_name(&self, class_name: &str) -> Vec<NodeId> {
-        if let Some(cached_result) = self.query_cache.get_by_class(class_name) {
-            return cached_result;
+        if let Some(cached) = self.query_cache.get_by_class(class_name) {
+            return cached;
         }
-
         let mut result = Vec::new();
-
-        for node_entry in self.nodes.iter() {
-            let node = node_entry.value().read();
-            if let Some(class_attr) = node.get_attribute("class") {
-                if class_attr.split_whitespace().any(|class| class == class_name) {
-                    result.push(*node_entry.key());
+        for entry in self.nodes.iter() {
+            let node = entry.value().read();
+            if let Some(classes) = node.get_attribute("class") {
+                if classes.split_whitespace().any(|c| c == class_name) {
+                    result.push(*entry.key());
                 }
             }
         }
-
         self.query_cache.cache_class(class_name, result.clone());
         result
     }
 
     pub fn get_elements_by_tag_name(&self, tag_name: &str) -> Vec<NodeId> {
-        if let Some(cached_result) = self.query_cache.get_by_tag(tag_name) {
-            return cached_result;
+        if let Some(cached) = self.query_cache.get_by_tag(tag_name) {
+            return cached;
         }
-
         let mut result = Vec::new();
-
-        for node_entry in self.nodes.iter() {
-            let node = node_entry.value().read();
-            if node.get_tag_name().to_lowercase() == tag_name.to_lowercase() {
-                result.push(*node_entry.key());
+        for entry in self.nodes.iter() {
+            let node = entry.value().read();
+            if node.get_tag_name().eq_ignore_ascii_case(tag_name) {
+                result.push(*entry.key());
             }
         }
-
         self.query_cache.cache_tag(tag_name, result.clone());
         result
     }
@@ -480,22 +465,19 @@ impl Document {
     }
 
     pub fn query_selector_all(&self, selector: &str) -> Result<Vec<NodeId>> {
-        if let Some(cached_result) = self.query_cache.get_by_selector(selector) {
-            return Ok(cached_result);
+        if let Some(cached) = self.query_cache.get_by_selector(selector) {
+            return Ok(cached);
         }
-
         let result = self.execute_css_selector(selector)?;
         self.query_cache.cache_selector_result(selector, result.clone());
-        
         Ok(result)
     }
 
     fn execute_css_selector(&self, selector: &str) -> Result<Vec<NodeId>> {
         let mut result = Vec::new();
-
         if selector.starts_with('#') {
-            if let Some(node_id) = self.get_element_by_id(&selector[1..]) {
-                result.push(node_id);
+            if let Some(id) = self.get_element_by_id(&selector[1..]) {
+                result.push(id);
             }
         } else if selector.starts_with('.') {
             result = self.get_elements_by_class_name(&selector[1..]);
@@ -504,7 +486,6 @@ impl Document {
         } else {
             result = self.complex_selector_matching(selector)?;
         }
-
         Ok(result)
     }
 
@@ -514,45 +495,31 @@ impl Document {
 
     pub fn get_inline_scripts(&self) -> Vec<InlineScript> {
         let mut scripts = Vec::new();
-
-        let script_nodes = self.get_elements_by_tag_name("script");
-        
-        for node_id in script_nodes {
-            if let Some(node) = self.nodes.get(&node_id) {
-                let node_guard = node.read();
-                
-                let script_type = node_guard.get_attribute("type")
-                    .unwrap_or_else(|| "text/javascript".to_string());
-                
-                let async_loading = node_guard.has_attribute("async");
-                let defer_execution = node_guard.has_attribute("defer");
-                let integrity = node_guard.get_attribute("integrity");
-                let nonce = node_guard.get_attribute("nonce");
-                
-                if node_guard.get_attribute("src").is_some() {
+        for node_id in self.get_elements_by_tag_name("script") {
+            if let Some(node_arc) = self.nodes.get(&node_id) {
+                let node = node_arc.read();
+                if node.get_attribute("src").is_some() {
                     continue;
                 }
-
-                let content = node_guard.get_text_content();
-                
-                if !content.trim().is_empty() {
-                    scripts.push(InlineScript {
-                        content,
-                        script_type,
-                        async_loading,
-                        defer_execution,
-                        integrity,
-                        nonce,
-                    });
+                let content = node.get_text_content();
+                if content.trim().is_empty() {
+                    continue;
                 }
+                scripts.push(InlineScript {
+                    content,
+                    script_type: node.get_attribute("type").unwrap_or_else(|| "text/javascript".to_string()),
+                    async_loading: node.has_attribute("async"),
+                    defer_execution: node.has_attribute("defer"),
+                    integrity: node.get_attribute("integrity"),
+                    nonce: node.get_attribute("nonce"),
+                });
             }
         }
-
         scripts
     }
 
     pub fn get_node(&self, node_id: NodeId) -> Option<Arc<RwLock<Node>>> {
-        self.nodes.get(&node_id).map(|entry| entry.clone())
+        self.nodes.get(&node_id).map(|e| e.clone())
     }
 
     pub fn get_children(&self, node_id: NodeId) -> Vec<NodeId> {
@@ -595,12 +562,10 @@ impl Document {
         self.metadata.write().ready_state = state;
     }
 
-    fn record_mutation(&self, mutation_record: MutationRecord) {
-        self.mutation_records.write().push(mutation_record.clone());
-
-        let observers = self.mutation_observers.read();
-        for observer in observers.iter() {
-            (observer.callback)(&[mutation_record.clone()]);
+    fn record_mutation(&self, record: MutationRecord) {
+        self.mutation_records.write().push(record.clone());
+        for observer in self.mutation_observers.read().iter() {
+            (observer.callback)(&[record.clone()]);
         }
     }
 
@@ -616,17 +581,14 @@ impl Document {
     }
 
     pub fn get_performance_metrics(&self) -> serde_json::Value {
-        let node_count = self.nodes.len();
-        let cache_version = self.query_cache.get_version();
-
         serde_json::json!({
-            "node_count": node_count,
-            "cache_version": cache_version,
+            "node_count": self.nodes.len(),
+            "cache_version": self.query_cache.get_version(),
             "cache_entries": {
                 "selector": self.query_cache.selector_cache.len(),
                 "id": self.query_cache.id_cache.len(),
                 "class": self.query_cache.class_cache.len(),
-                "tag": self.query_cache.tag_cache.len(),
+                "tag": self.query_cache.tag_cache.len()
             }
         })
     }
@@ -634,8 +596,7 @@ impl Document {
     pub async fn cleanup(&self) {
         self.query_cache.invalidate();
         self.mutation_records.write().clear();
-        
-        let all_node_ids: Vec<NodeId> = self.nodes.iter().map(|entry| *entry.key()).collect();
+        let all_node_ids: Vec<NodeId> = self.nodes.iter().map(|e| *e.key()).collect();
         for node_id in all_node_ids {
             self.nodes.remove(&node_id);
         }
@@ -648,9 +609,7 @@ struct HTMLParser {
 
 impl HTMLParser {
     fn new() -> Self {
-        Self {
-            current_node: None,
-        }
+        Self { current_node: None }
     }
 
     fn parse(&self, _html: &str, _root_id: NodeId, _document: &Document) -> Result<()> {
