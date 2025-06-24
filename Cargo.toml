@@ -65,7 +65,7 @@ v8 = "0.89.0"
 html5ever = "0.26.0"
 css-color = "0.2.7"
 cssparser = "0.31.2"
-selectors = "0.25.0"
+selectors = "0.29.0"
 
 url = "2.5.0"
 mime = "0.3.17"
