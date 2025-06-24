@@ -11,7 +11,7 @@ rust-version = "1.75"
 [features]
 default = ["vulkan", "jit", "pwa", "sandbox"]
 vulkan = ["dep:ash", "dep:gpu-allocator"]
-jit = ["dep:cranelift", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module"]
+jit = ["dep:cranelift", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-native"]
 pwa = ["indexeddb", "cache_api", "manifest_parser"]
 indexeddb = ["dep:sled"]
 cache_api = ["dep:moka"]
@@ -31,6 +31,7 @@ futures = "0.3.30"
 parking_lot = "0.12.1"
 crossbeam = "0.8.4"
 rayon = "1.8.1"
+async-recursion = "=1.0.1"
 
 serde = { version = "1.0.196", features = ["derive", "rc"] }
 serde_json = "1.0.113"
@@ -59,6 +60,7 @@ cranelift-codegen = { version = "0.105.4", optional = true }
 cranelift-frontend = { version = "0.105.4", optional = true }
 cranelift-jit = { version = "0.105.4", optional = true }
 cranelift-module = { version = "0.105.4", optional = true }
+cranelift-native = { version = "0.105.4", optional = true }
 target-lexicon = "0.12.13"
 
 v8 = "0.89.0"

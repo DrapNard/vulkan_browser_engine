@@ -1,15 +1,16 @@
 use std::sync::Arc;
-use std::collections::HashMap;
-use parking_lot::{RwLock, Mutex};
+use parking_lot::{RwLock};
 use dashmap::DashMap;
 use smallvec::SmallVec;
 use thiserror::Error;
 use rayon::prelude::*;
+use async_recursion::async_recursion;
+
 
 use super::{flexbox::FlexboxLayout, grid::GridLayout};
 use crate::core::{
-    dom::{Document, NodeId, Node, DisplayType, PositionType},
-    css::{ComputedStyles, StyleEngine, LayoutContext},
+    dom::{Document, NodeId, Node, DisplayType},
+    css::{ComputedStyles, StyleEngine, ComputedValue},
 };
 
 #[derive(Error, Debug)]
@@ -250,7 +251,7 @@ impl LayoutEngine {
         let current_generation = *generation;
         drop(generation);
 
-        if let Some(root_id) = *document.root_node.read() {
+        if let Some(root_id) = document.get_root_node() {
             let viewport_width = *self.viewport_width.read();
             let viewport_height = *self.viewport_height.read();
             
@@ -275,6 +276,7 @@ impl LayoutEngine {
         Ok(())
     }
 
+    #[async_recursion(?Send)]
     async fn layout_node_recursive(
         &self,
         node_id: NodeId,
@@ -337,7 +339,7 @@ impl LayoutEngine {
             }
         };
 
-        self.cache_layout_result(node_id, constraints, result.clone(), generation);
+        self.cache_layout_result(node_id, constraints.clone(), result.clone(), generation);
 
         Ok(result)
     }
@@ -417,23 +419,14 @@ impl LayoutEngine {
 
     async fn layout_inline_node(
         &self,
-        node_id: NodeId,
+        _node_id: NodeId,
         constraints: LayoutConstraints,
-        document: &Document,
+        _document: &Document,
         style_engine: &StyleEngine,
-        generation: u64,
+        _generation: u64,
     ) -> Result<LayoutResult> {
-        let computed_styles = style_engine.get_computed_styles(node_id).unwrap();
-        
-        if let Some(node) = document.get_node(node_id) {
-            let node_guard = node.read();
-            if node_guard.is_text() {
-                return self.layout_text_node(&node_guard, &computed_styles, &constraints).await;
-            }
-        }
-
+        let computed_styles = style_engine.get_computed_styles(_node_id).unwrap();
         let layout_box = self.compute_box_model(&computed_styles, &constraints)?;
-        
         Ok(LayoutResult {
             layout_box,
             baseline: Some(layout_box.content_y + layout_box.content_height * 0.8),
@@ -461,8 +454,16 @@ impl LayoutEngine {
         constraints: &LayoutConstraints,
     ) -> Result<LayoutResult> {
         let text_content = node.get_text_content();
-        let font_size = computed_styles.get_used_value("font-size").unwrap_or(16.0);
-        let line_height = computed_styles.get_used_value("line-height").unwrap_or(font_size * 1.2);
+        let font_size = match computed_styles.get_computed_value("font-size") {
+            Ok(ComputedValue::Length(length)) => length,
+            Ok(ComputedValue::Percentage(percentage)) => constraints.available_width.map(|w| w * percentage / 100.0).unwrap_or(16.0),
+            _ => 16.0, // Default font size
+        };
+        let line_height = match computed_styles.get_computed_value("line-height") {
+            Ok(ComputedValue::Length(length)) => length,
+            Ok(ComputedValue::Percentage(percentage)) => font_size * percentage / 100.0,
+            _ => font_size * 1.2, // Default line height
+        };
         
         let available_width = constraints.available_width.unwrap_or(f32::INFINITY);
         
@@ -605,54 +606,81 @@ impl LayoutEngine {
         let width = self.resolve_length_property(computed_styles, "width", constraints.available_width)?;
         let height = self.resolve_length_property(computed_styles, "height", constraints.available_height)?;
 
-        let padding_top = computed_styles.get_used_value("padding-top").unwrap_or(0.0);
-        let padding_right = computed_styles.get_used_value("padding-right").unwrap_or(0.0);
-        let padding_bottom = computed_styles.get_used_value("padding-bottom").unwrap_or(0.0);
-        let padding_left = computed_styles.get_used_value("padding-left").unwrap_or(0.0);
-
-        let border_top = computed_styles.get_used_value("border-top-width").unwrap_or(0.0);
-        let border_right = computed_styles.get_used_value("border-right-width").unwrap_or(0.0);
-        let border_bottom = computed_styles.get_used_value("border-bottom-width").unwrap_or(0.0);
-        let border_left = computed_styles.get_used_value("border-left-width").unwrap_or(0.0);
-
-        let margin_top = computed_styles.get_used_value("margin-top").unwrap_or(0.0);
-        let margin_right = computed_styles.get_used_value("margin-right").unwrap_or(0.0);
-        let margin_bottom = computed_styles.get_used_value("margin-bottom").unwrap_or(0.0);
-        let margin_left = computed_styles.get_used_value("margin-left").unwrap_or(0.0);
+        let pt = match computed_styles.get_computed_value("padding-top") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let pr = match computed_styles.get_computed_value("padding-right") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let pb = match computed_styles.get_computed_value("padding-bottom") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let pl = match computed_styles.get_computed_value("padding-left") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let bt = match computed_styles.get_computed_value("border-top-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let br = match computed_styles.get_computed_value("border-right-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let bb = match computed_styles.get_computed_value("border-bottom-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let bl = match computed_styles.get_computed_value("border-left-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let mt = match computed_styles.get_computed_value("margin-top") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let mr = match computed_styles.get_computed_value("margin-right") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let mb = match computed_styles.get_computed_value("margin-bottom") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let ml = match computed_styles.get_computed_value("margin-left") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
 
         let content_width = width
-            .or(constraints.available_width.map(|w| w - padding_left - padding_right - border_left - border_right - margin_left - margin_right))
+            .or(constraints.available_width.map(|av| av - pl - pr - bl - br - ml - mr))
             .unwrap_or(0.0)
             .max(constraints.min_width);
 
         let content_height = height.unwrap_or(0.0).max(constraints.min_height);
 
-        if let Some(max_width) = constraints.max_width {
-            let content_width = content_width.min(max_width);
-        }
-
-        if let Some(max_height) = constraints.max_height {
-            let content_height = content_height.min(max_height);
-        }
-
         Ok(LayoutBox {
-            content_x: margin_left + border_left + padding_left,
-            content_y: margin_top + border_top + padding_top,
+            content_x: ml + bl + pl,
+            content_y: mt + bt + pt,
             content_width,
             content_height,
-            padding_top,
-            padding_right,
-            padding_bottom,
-            padding_left,
-            border_top,
-            border_right,
-            border_bottom,
-            border_left,
-            margin_top,
-            margin_right,
-            margin_bottom,
-            margin_left,
+            padding_top: pt,
+            padding_right: pr,
+            padding_bottom: pb,
+            padding_left: pl,
+            border_top: bt,
+            border_right: br,
+            border_bottom: bb,
+            border_left: bl,
+            margin_top: mt,
+            margin_right: mr,
+            margin_bottom: mb,
+            margin_left: ml,
         })
+
     }
 
     fn resolve_length_property(

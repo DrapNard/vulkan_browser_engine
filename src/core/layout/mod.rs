@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::core::{
     dom::{Document, NodeId},
-    css::StyleEngine,
+    css::{StyleEngine, ComputedValue},
 };
 
 #[derive(Error, Debug)]
@@ -95,8 +95,8 @@ impl LayoutManager {
             Ok(result) => {
                 result.map_err(LayoutManagerError::from)?;
                 
-                let layout_time = start_time.elapsed();
-                self.update_performance_metrics(layout_time).await;
+                start_time.elapsed();
+                self.update_performance_metrics().await;
                 
                 Ok(())
             }
@@ -148,7 +148,7 @@ impl LayoutManager {
         monitor.clone()
     }
 
-    async fn update_performance_metrics(&self, layout_time: std::time::Duration) {
+    async fn update_performance_metrics(&self) {
         let mut monitor = self.performance_monitor.write();
         monitor.last_layout_timestamp = Some(std::time::Instant::now());
         
@@ -191,13 +191,14 @@ pub mod utils {
 
     pub fn calculate_intrinsic_width(
         node_id: NodeId,
-        document: &Document,
         style_engine: &StyleEngine,
     ) -> f32 {
         // Simplified intrinsic width calculation
         if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-            if let Ok(width) = computed_styles.get_used_value("width") {
-                return width;
+            if let Ok(width) = computed_styles.get_computed_value("width") {
+                if let ComputedValue::Length(v) = width {
+                    return v;
+                }
             }
         }
         0.0
@@ -205,13 +206,14 @@ pub mod utils {
 
     pub fn calculate_intrinsic_height(
         node_id: NodeId,
-        document: &Document,
         style_engine: &StyleEngine,
     ) -> f32 {
         // Simplified intrinsic height calculation
         if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-            if let Ok(height) = computed_styles.get_used_value("height") {
-                return height;
+            if let Ok(height) = computed_styles.get_computed_value("height") {
+                if let ComputedValue::Length(v) = height {
+                    return v;
+                }
             }
         }
         0.0
@@ -249,7 +251,7 @@ pub mod utils {
         // Simplified min-content width calculation
         if let Some(node) = document.get_node(node_id) {
             let node_guard = node.read();
-            if node_guard.is_text() {
+            if (*node_guard).is_text() {
                 let text = node_guard.get_text_content();
                 let longest_word = text.split_whitespace()
                     .map(|word| word.len())
@@ -257,7 +259,7 @@ pub mod utils {
                     .unwrap_or(0);
                 
                 if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-                    let font_size = computed_styles.get_used_value("font-size").unwrap_or(16.0);
+                    let font_size = match computed_styles.get_computed_value("font_size") {Ok(ComputedValue::Length(v)) => v, _ => 16.0,};
                     return longest_word as f32 * font_size * 0.6; // Approximation
                 }
             }
@@ -273,11 +275,11 @@ pub mod utils {
         // Simplified max-content width calculation
         if let Some(node) = document.get_node(node_id) {
             let node_guard = node.read();
-            if node_guard.is_text() {
+            if (*node_guard).is_text() {
                 let text = node_guard.get_text_content();
                 
                 if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-                    let font_size = computed_styles.get_used_value("font-size").unwrap_or(16.0);
+                    let font_size = match computed_styles.get_computed_value("font_size") {Ok(ComputedValue::Length(v)) => v, _ => 16.0,};
                     return text.len() as f32 * font_size * 0.6; // Approximation
                 }
             }
@@ -406,7 +408,6 @@ pub mod utils {
 
 // Text measurement utilities
 pub mod text {
-    use super::*;
 
     #[derive(Debug, Clone)]
     pub struct TextMetrics {
@@ -421,7 +422,6 @@ pub mod text {
     pub fn measure_text(
         text: &str,
         font_size: f32,
-        font_family: &str,
         line_height: f32,
         max_width: Option<f32>,
     ) -> TextMetrics {

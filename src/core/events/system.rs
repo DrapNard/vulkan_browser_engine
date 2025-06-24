@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::dom::{Document, NodeId};
+use crate::core::dom::{NodeId};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};

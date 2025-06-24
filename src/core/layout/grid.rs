@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::collections::HashMap;
-use smallvec::SmallVec;
 use thiserror::Error;
 
 use super::engine::{LayoutEngine, LayoutConstraints, LayoutResult, LayoutBox, LayoutError};
@@ -293,12 +292,14 @@ impl GridLayout {
     fn parse_grid_container(&self, styles: &ComputedStyles) -> std::result::Result<GridContainer, LayoutError> {
         let mut container = GridContainer::default();
 
-        container.row_gap = styles.get_used_value("row-gap").unwrap_or(0.0);
-        container.column_gap = styles.get_used_value("column-gap").unwrap_or(0.0);
+        container.row_gap = match styles.get_computed_value("row-gap") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        container.column_gap = match styles.get_computed_value("column-gap") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
 
-        if let Ok(gap) = styles.get_used_value("gap") {
-            if container.row_gap == 0.0 { container.row_gap = gap; }
-            if container.column_gap == 0.0 { container.column_gap = gap; }
+        if let Ok(gap) = styles.get_computed_value("gap") {
+            if let ComputedValue::Length(gap_val) = gap {
+                if container.row_gap == 0.0 { container.row_gap = gap_val; }
+                if container.column_gap == 0.0 { container.column_gap = gap_val; }
+            }
         }
 
         container.justify_items = self.parse_justify_items(styles)?;
@@ -409,7 +410,7 @@ impl GridLayout {
         for &child_id in children {
             if let Some(computed_styles) = style_engine.get_computed_styles(child_id) {
                 let area = self.parse_grid_area(&computed_styles)?;
-                let order = computed_styles.get_used_value("order").unwrap_or(0.0) as i32;
+                let order = match computed_styles.get_computed_value("order") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,} as i32;
 
                 items.push(GridItem {
                     node_id: child_id,
@@ -926,20 +927,20 @@ impl GridLayout {
         let content_width = constraints.available_width.unwrap_or(grid_width);
         let content_height = constraints.available_height.unwrap_or(grid_height);
 
-        let padding_top = computed_styles.get_used_value("padding-top").unwrap_or(0.0);
-        let padding_right = computed_styles.get_used_value("padding-right").unwrap_or(0.0);
-        let padding_bottom = computed_styles.get_used_value("padding-bottom").unwrap_or(0.0);
-        let padding_left = computed_styles.get_used_value("padding-left").unwrap_or(0.0);
+        let padding_top = match computed_styles.get_computed_value("padding_top") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let padding_right = match computed_styles.get_computed_value("padding_right") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let padding_bottom = match computed_styles.get_computed_value("padding_bottom") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let padding_left = match computed_styles.get_computed_value("padding_left") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
 
-        let border_top = computed_styles.get_used_value("border-top-width").unwrap_or(0.0);
-        let border_right = computed_styles.get_used_value("border-right-width").unwrap_or(0.0);
-        let border_bottom = computed_styles.get_used_value("border-bottom-width").unwrap_or(0.0);
-        let border_left = computed_styles.get_used_value("border-left-width").unwrap_or(0.0);
+        let border_top = match computed_styles.get_computed_value("border-top-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let border_right = match computed_styles.get_computed_value("border-right-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let border_bottom = match computed_styles.get_computed_value("border-bottom-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let border_left = match computed_styles.get_computed_value("border-left-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
 
-        let margin_top = computed_styles.get_used_value("margin-top").unwrap_or(0.0);
-        let margin_right = computed_styles.get_used_value("margin-right").unwrap_or(0.0);
-        let margin_bottom = computed_styles.get_used_value("margin-bottom").unwrap_or(0.0);
-        let margin_left = computed_styles.get_used_value("margin-left").unwrap_or(0.0);
+        let margin_top = match computed_styles.get_computed_value("margin_top") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let margin_right = match computed_styles.get_computed_value("margin_right") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let margin_bottom = match computed_styles.get_computed_value("margin_bottom") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let margin_left = match computed_styles.get_computed_value("margin_left") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
 
         Ok(LayoutBox {
             content_x: margin_left + border_left + padding_left,

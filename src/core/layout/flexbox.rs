@@ -1,6 +1,4 @@
 use std::sync::Arc;
-use std::collections::HashMap;
-use smallvec::SmallVec;
 use thiserror::Error;
 
 use super::engine::{LayoutEngine, LayoutConstraints, LayoutResult, LayoutBox, LayoutError};
@@ -230,7 +228,7 @@ impl FlexboxLayout {
         self.cache.insert(node_id, flex_container.clone());
 
         let children = document.get_children(node_id);
-        let mut flex_items = self.create_flex_items(&children, document, style_engine).await?;
+        let mut flex_items = self.create_flex_items(&children, style_engine).await?;
 
         let container_main_size = self.get_main_axis_size(&flex_container, &constraints);
         let container_cross_size = self.get_cross_axis_size(&flex_container, &constraints);
@@ -239,7 +237,7 @@ impl FlexboxLayout {
 
         let mut flex_lines = self.collect_flex_lines(&mut flex_items, &flex_container, container_main_size);
 
-        self.resolve_flex_lengths(&mut flex_lines, &flex_container, container_main_size)?;
+        self.resolve_flex_lengths(&mut flex_lines, &flex_container, container_main_size);
 
         self.determine_cross_axis_sizes(&mut flex_lines, &flex_container, document, style_engine, layout_engine, generation).await?;
 
@@ -273,9 +271,9 @@ impl FlexboxLayout {
         let align_items = self.parse_align_items(styles)?;
         let align_content = self.parse_align_content(styles)?;
         
-        let gap = styles.get_used_value("gap").unwrap_or(0.0);
-        let row_gap = styles.get_used_value("row-gap").unwrap_or(gap);
-        let column_gap = styles.get_used_value("column-gap").unwrap_or(gap);
+        let gap = match styles.get_computed_value("gap") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let row_gap = match styles.get_computed_value("row_gap") {Ok(ComputedValue::Length(v)) => v, _ => gap,};
+        let column_gap = match styles.get_computed_value("column-gap") {Ok(ComputedValue::Length(v)) => v, _ => gap,};
 
         Ok(FlexContainer {
             direction,
@@ -372,7 +370,6 @@ impl FlexboxLayout {
     async fn create_flex_items(
         &self,
         children: &[NodeId],
-        document: &Document,
         style_engine: &StyleEngine,
     ) -> std::result::Result<Vec<FlexItem>, LayoutError> {
         let mut items = Vec::new();
@@ -381,8 +378,8 @@ impl FlexboxLayout {
             if let Some(computed_styles) = style_engine.get_computed_styles(child_id) {
                 let mut item = FlexItem::new(child_id);
                 
-                item.grow = computed_styles.get_used_value("flex-grow").unwrap_or(0.0);
-                item.shrink = computed_styles.get_used_value("flex-shrink").unwrap_or(1.0);
+                item.grow = match computed_styles.get_computed_value("flex-grow") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+                item.shrink = match computed_styles.get_computed_value("flex-shrink") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
                 
                 if let Ok(ComputedValue::Length(basis)) = computed_styles.get_computed_value("flex-basis") {
                     item.basis = Some(basis);
@@ -391,7 +388,7 @@ impl FlexboxLayout {
                 }
 
                 item.align_self = self.parse_align_self(&computed_styles)?;
-                item.order = computed_styles.get_used_value("order").unwrap_or(0.0) as i32;
+                item.order = match computed_styles.get_computed_value("order") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,} as i32;
 
                 items.push(item);
             }
@@ -555,14 +552,15 @@ impl FlexboxLayout {
 
     fn grow_flex_items(&self, items: &mut [FlexItem], free_space: f32) -> Result<()> {
         let total_flex_grow: f32 = items.iter().map(|item| item.grow).sum();
-        
+
         if total_flex_grow <= 0.0 {
             return Ok(());
         }
 
+        let total_flex_grow_copy = total_flex_grow;
         for item in items.iter_mut() {
             if item.grow > 0.0 {
-                let share = (item.grow / total_flex_grow) * free_space;
+                let share = (item.grow / total_flex_grow_copy) * free_space;
                 item.hypothetical_main_size = item.flex_base_size + share;
             }
         }
@@ -603,8 +601,8 @@ impl FlexboxLayout {
         generation: u64,
     ) -> std::result::Result<(), LayoutError> {
         for line in lines.iter_mut() {
-            let mut max_cross_size = 0.0;
-            let mut baseline = 0.0;
+            let mut max_cross_size = 0.0f32;
+            let mut baseline = 0.0f32;
 
             for item in &mut line.items {
                 let main_size = item.main_size;
@@ -639,11 +637,14 @@ impl FlexboxLayout {
                     FlexDirection::Column | FlexDirection::ColumnReverse => layout_result.layout_box.content_width,
                 };
 
+                // Extract baseline before moving layout_result
+                let item_baseline_opt = layout_result.baseline;
+
                 item.layout_result = Some(layout_result);
 
                 if item.align_self == AlignSelf::Baseline || 
                    (item.align_self == AlignSelf::Auto && container.align_items == AlignItems::Baseline) {
-                    if let Some(item_baseline) = layout_result.baseline {
+                    if let Some(item_baseline) = item_baseline_opt {
                         baseline = baseline.max(item_baseline);
                     }
                 }
@@ -725,7 +726,7 @@ impl FlexboxLayout {
         let mut current_cross_position = container_box.content_y;
 
         for line in lines.iter_mut() {
-            self.position_items_on_main_axis(&mut line.items, container, container_box.content_x, line.main_size, container_box.content_width);
+            self.position_items_on_main_axis(&mut line.items, container, container_box.content_x, container_box.content_width);
             self.position_items_on_cross_axis(&mut line.items, container, current_cross_position, line.cross_size, line.baseline);
             
             current_cross_position += line.cross_size + container.row_gap;
@@ -737,7 +738,6 @@ impl FlexboxLayout {
         items: &mut [FlexItem],
         container: &FlexContainer,
         container_start: f32,
-        line_main_size: f32,
         container_main_size: f32,
     ) {
         let total_item_main_size: f32 = items.iter().map(|item| item.main_size).sum();
@@ -771,6 +771,7 @@ impl FlexboxLayout {
         };
 
         let mut current_position = container_start + initial_offset;
+        let items_len = items.len();
 
         for (i, item) in items.iter_mut().enumerate() {
             let item_position = match container.direction {
@@ -792,7 +793,7 @@ impl FlexboxLayout {
             }
 
             current_position += item.main_size + spacing;
-            if i < items.len() - 1 {
+            if i < items_len - 1 {
                 current_position += container.column_gap;
             }
         }
@@ -868,20 +869,20 @@ impl FlexboxLayout {
         let width = constraints.available_width.unwrap_or(0.0);
         let height = constraints.available_height.unwrap_or(0.0);
 
-        let padding_top = computed_styles.get_used_value("padding-top").unwrap_or(0.0);
-        let padding_right = computed_styles.get_used_value("padding-right").unwrap_or(0.0);
-        let padding_bottom = computed_styles.get_used_value("padding-bottom").unwrap_or(0.0);
-        let padding_left = computed_styles.get_used_value("padding-left").unwrap_or(0.0);
+        let padding_top = match computed_styles.get_computed_value("padding_top") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let padding_right = match computed_styles.get_computed_value("padding_right") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let padding_bottom = match computed_styles.get_computed_value("padding_bottom") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let padding_left = match computed_styles.get_computed_value("padding_left") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
 
-        let border_top = computed_styles.get_used_value("border-top-width").unwrap_or(0.0);
-        let border_right = computed_styles.get_used_value("border-right-width").unwrap_or(0.0);
-        let border_bottom = computed_styles.get_used_value("border-bottom-width").unwrap_or(0.0);
-        let border_left = computed_styles.get_used_value("border-left-width").unwrap_or(0.0);
+        let border_top = match computed_styles.get_computed_value("border-top-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let border_right = match computed_styles.get_computed_value("border-right-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let border_bottom = match computed_styles.get_computed_value("border-bottom-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let border_left = match computed_styles.get_computed_value("border-left-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
 
-        let margin_top = computed_styles.get_used_value("margin-top").unwrap_or(0.0);
-        let margin_right = computed_styles.get_used_value("margin-right").unwrap_or(0.0);
-        let margin_bottom = computed_styles.get_used_value("margin-bottom").unwrap_or(0.0);
-        let margin_left = computed_styles.get_used_value("margin-left").unwrap_or(0.0);
+        let margin_top = match computed_styles.get_computed_value("margin_top") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let margin_right = match computed_styles.get_computed_value("margin_right") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let margin_bottom = match computed_styles.get_computed_value("margin_bottom") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let margin_left = match computed_styles.get_computed_value("margin_left") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
 
         let content_width = width - padding_left - padding_right - border_left - border_right;
         let content_height = height - padding_top - padding_bottom - border_top - border_bottom;

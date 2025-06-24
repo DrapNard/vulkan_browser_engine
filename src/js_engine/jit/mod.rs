@@ -9,6 +9,7 @@ use cranelift::prelude::*;
 use cranelift_codegen::ir::Function;
 use cranelift_codegen::Context as CraneliftContext;
 use cranelift_codegen::settings::{self, Configurable};
+use cranelift_codegen::ir::UserFuncName;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Module, FuncId, Linkage};
@@ -219,7 +220,7 @@ impl JITCompiler {
 
         let isa_flags = settings::Flags::new(flag_builder);
         let isa = cranelift_native::builder()
-            .unwrap_or_else(|| {
+            .unwrap_or_else(|_| {
                 cranelift_codegen::isa::lookup(Triple::host()).unwrap()
             })
             .finish(isa_flags)
@@ -287,11 +288,11 @@ impl JITCompiler {
             let func_id = module.declare_function(&js_function.name, Linkage::Local, &signature)
                 .map_err(|e| JITError::Compilation(e.to_string()))?;
 
-            context.func = Function::with_name_signature(ExternalName::user(0, func_id.as_u32()), signature.clone());
+            context.func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature.clone());
 
             {
                 let mut builder = FunctionBuilder::new(&mut context.func, &mut *builder_context);
-                self.compile_function_body(&mut builder, js_function)?;
+                self.compile_function_body(builder, js_function)?;
             }
 
             if let Err(errors) = module.define_function(func_id, &mut context) {
@@ -337,18 +338,15 @@ impl JITCompiler {
         Ok(sig)
     }
 
-    fn compile_function_body(&self, builder: &mut FunctionBuilder, _js_function: &JSFunction) -> Result<()> {
-        let entry_block = builder.create_block();
-        builder.append_block_params_for_function_params(entry_block);
-        builder.switch_to_block(entry_block);
-        builder.seal_block(entry_block);
-
-        let undefined_value = builder.ins().iconst(types::I64, 0);
-
-        builder.ins().return_(&[undefined_value]);
-        builder.finalize();
-
-        Ok(())
+    fn compile_function_body(&self, mut builder: FunctionBuilder, js_function: &JSFunction) -> Result<()> {
+    let entry_block = builder.create_block();
+    builder.append_block_params_for_function_params(entry_block);
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+    let undefined_value = builder.ins().iconst(types::I64, 0);
+    builder.ins().return_(&[undefined_value]);
+    builder.finalize();
+    Ok(())
     }
 
     pub async fn specialize_function(&self, function_name: &str, types: &[ValueType]) -> Result<FuncId> {
@@ -373,7 +371,7 @@ impl JITCompiler {
         let func_id = module.declare_function(&specialized_name, Linkage::Local, &signature)
             .map_err(|e| JITError::Compilation(e.to_string()))?;
 
-        context.func = Function::with_name_signature(ExternalName::user(0, func_id.as_u32()), signature);
+        context.func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature);
 
         {
             let mut builder = FunctionBuilder::new(&mut context.func, &mut *builder_context);

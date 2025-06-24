@@ -3,7 +3,7 @@ pub mod resolver;
 pub use resolver::*;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use async_recursion::async_recursion;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::log;
@@ -14,6 +14,7 @@ pub struct ModuleSystem {
     loader: ModuleLoader,
 }
 
+#[derive(Clone)]
 pub struct Module {
     pub id: String,
     pub source: String,
@@ -43,7 +44,7 @@ impl ModuleSystem {
             loader: ModuleLoader::new(),
         }
     }
-
+    #[async_recursion]
     pub async fn import_module(&self, specifier: &str, referrer: Option<&str>) -> Result<Arc<Module>, ModuleError> {
         let resolved_url = self.resolver.resolve(specifier, referrer)?;
         
@@ -306,6 +307,12 @@ pub enum ModuleError {
     UnsupportedScheme(String),
     #[error("Invalid data URL")]
     InvalidDataUrl,
+}
+
+impl From<resolver::ResolveError> for ModuleError {
+    fn from(err: resolver::ResolveError) -> Self {
+        ModuleError::ResolutionError(err.to_string())
+    }
 }
 
 impl Default for ModuleSystem {

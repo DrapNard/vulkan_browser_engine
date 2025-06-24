@@ -40,7 +40,7 @@ impl Heap {
     }
 
     pub fn get_object_mut(&mut self, id: ObjectId) -> Option<&mut (dyn GcObject + '_)> {
-        self.objects.get_mut(&id).map(move |obj| obj.as_mut())
+        Some(self.objects.get_mut(&id)?.as_mut())
     }
 
     pub fn sweep(&mut self, marked: &std::collections::HashSet<ObjectId>) -> usize {

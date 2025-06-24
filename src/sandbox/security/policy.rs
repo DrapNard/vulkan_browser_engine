@@ -1,4 +1,4 @@
-use super::{SecurityEvent, SecuritySeverity, ThreatLevel};
+use super::{SecurityEvent, SecuritySeverity};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::log;
@@ -323,21 +323,19 @@ impl SecurityPolicyEngine {
             }
 
             for rule in &policy.rules {
-                if self.evaluate_condition(&rule.condition, event) {
-                    if !self.check_exceptions(&rule.exceptions, event) {
-                        let violation = PolicyViolation {
-                            policy_id: policy.id.clone(),
-                            rule_id: rule.id.clone(),
-                            violation_type: self.determine_violation_type(&rule.condition),
-                            severity: policy.severity,
-                            description: format!("Policy {} violated by rule {}", policy.name, rule.id),
-                            evidence: self.collect_evidence(event),
-                        };
-                        violations.push(violation);
+                if self.evaluate_condition(&rule.condition, event) && !self.check_exceptions(&rule.exceptions, event) {
+                    let violation = PolicyViolation {
+                        policy_id: policy.id.clone(),
+                        rule_id: rule.id.clone(),
+                        violation_type: self.determine_violation_type(&rule.condition),
+                        severity: policy.severity,
+                        description: format!("Policy {} violated by rule {}", policy.name, rule.id),
+                        evidence: self.collect_evidence(event),
+                    };
+                    violations.push(violation);
 
-                        let applied_action = self.apply_action(&rule.action, event, &policy.id);
-                        applied_actions.push(applied_action);
-                    }
+                    let applied_action = self.apply_action(&rule.action, event, &policy.id);
+                    applied_actions.push(applied_action);
                 }
             }
         }

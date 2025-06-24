@@ -29,6 +29,10 @@ impl NodeId {
     pub fn new() -> Self {
         Self(fastrand::u64(..))
     }
+
+    pub fn is_text(&self) -> bool {
+        self.0 & 0x1 == 0x1
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +201,10 @@ impl Node {
         self.parent = None;
         self.children.clear();
         self.namespace_uri = None;
+    }
+
+    pub fn is_text(&self) -> bool {
+        self.node_type == NodeType::Text
     }
 }
 

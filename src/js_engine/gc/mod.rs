@@ -42,9 +42,10 @@ impl GarbageCollector {
 
     pub async fn allocate<T: GcObject + 'static>(&mut self, object: T) -> ObjectId {
         let mut heap = self.heap.write().await;
+        let size = object.size();
         let id = heap.allocate(Box::new(object));
         
-        self.allocation_count += object.size();
+        self.allocation_count += size;
         
         if self.allocation_count > self.collection_threshold {
             drop(heap);

@@ -1,10 +1,10 @@
 pub mod fetch;
 
-pub use fetch::{NetworkManager, FetchRequest, FetchResponse, NetworkError};
+pub use fetch::{FetchResponse};
 
 use std::sync::Arc;
 use std::collections::HashMap;
-use parking_lot::{RwLock, Mutex};
+use parking_lot::RwLock;
 use dashmap::DashMap;
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
@@ -519,7 +519,7 @@ impl SecurityPolicy {
                 ipv4.is_private() || ipv4.is_loopback() || ipv4.is_link_local()
             }
             std::net::IpAddr::V6(ipv6) => {
-                ipv6.is_loopback() || ipv6.is_unique_local() || ipv6.is_link_local()
+                ipv6.is_loopback() || ipv6.is_unique_local() || ipv6.is_unicast_link_local()
             }
         }
     }
@@ -627,7 +627,7 @@ impl NetworkManager {
                                 .collect(),
                             body: cached_response.data,
                             url: request.url,
-                            from_cache: true,
+                            redirected: true,
                         });
                     }
                 }
@@ -746,7 +746,7 @@ impl NetworkManager {
             headers: headers.clone(),
             body: body.clone(),
             url: request.url.clone(),
-            from_cache: false,
+            redirected: false,
         };
 
         // Cache the response if appropriate
@@ -853,13 +853,4 @@ pub struct FetchRequest {
     pub timeout_ms: Option<u64>,
     pub follow_redirects: bool,
     pub cache_policy: Option<CachePolicy>,
-}
-
-#[derive(Debug, Clone)]
-pub struct FetchResponse {
-    pub status: u16,
-    pub headers: HashMap<String, String>,
-    pub body: Vec<u8>,
-    pub url: String,
-    pub from_cache: bool,
 }

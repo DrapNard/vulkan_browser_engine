@@ -1,4 +1,4 @@
-use reqwest::{Client, Response};
+use reqwest::{Client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -35,7 +35,7 @@ pub enum CredentialsMode {
     Include,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CacheMode {
     Default,
     NoStore,
@@ -56,7 +56,7 @@ pub struct FetchResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
-    pub url: Url,
+    pub url: String,
     pub redirected: bool,
 }
 
@@ -137,7 +137,7 @@ impl FetchEngine {
             status,
             headers,
             body,
-            url: final_url,
+            url: final_url.to_string(),
             redirected,
         })
     }

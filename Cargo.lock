@@ -186,6 +186,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-recursion"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b94284737077ffd7d06326b3c9b20cf59cc66dd4677a3dfe3dc0e30d7bc8be9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4580,6 +4591,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "ash",
+ "async-recursion",
  "async-trait",
  "base64 0.22.1",
  "bincode",
@@ -4590,6 +4602,7 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",
+ "cranelift-native",
  "criterion",
  "crossbeam",
  "css-color",

@@ -619,7 +619,7 @@ impl Node {
     pub fn is_text(&self) -> bool {
         self.node_type == NodeType::Text
     }
-
+    
     pub fn is_comment(&self) -> bool {
         self.node_type == NodeType::Comment
     }
