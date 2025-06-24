@@ -710,10 +710,10 @@ impl FlexboxLayout {
         };
 
         // Position lines with calculated offset and spacing
-        let mut current_position = offset;
+        let mut _current_position = offset;
         for line in lines.iter_mut() {
             // Store line position for later use in positioning items
-            current_position += line.cross_size + spacing + container.row_gap;
+            _current_position += line.cross_size + spacing + container.row_gap;
         }
     }
 

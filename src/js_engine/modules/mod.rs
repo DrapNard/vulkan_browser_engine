@@ -1,5 +1,6 @@
 pub mod resolver;
 
+use base64::Engine;
 pub use resolver::*;
 
 use std::collections::HashMap;
@@ -44,53 +45,53 @@ impl ModuleSystem {
             loader: ModuleLoader::new(),
         }
     }
-    #[async_recursion]
-    pub async fn import_module(&self, specifier: &str, referrer: Option<&str>) -> Result<Arc<Module>, ModuleError> {
-        let resolved_url = self.resolver.resolve(specifier, referrer)?;
-        
-        {
-            let cache = self.module_cache.read().await;
-            if let Some(module) = cache.get(&resolved_url) {
-                if module.loaded {
-                    return Ok(module.clone());
-                }
+    #[async_recursion(?Send)]
+pub async fn import_module(&self, specifier: &str, referrer: Option<String>) -> Result<Arc<Module>, ModuleError> {
+    let resolved_url = self.resolver.resolve(specifier, referrer.as_deref())?;
+   
+    {
+        let cache = self.module_cache.read().await;
+        if let Some(module) = cache.get(&resolved_url) {
+            if module.loaded {
+                return Ok(module.clone());
             }
         }
-
-        let source = self.loader.load(&resolved_url).await?;
-        let dependencies = self.extract_dependencies(&source)?;
-        
-        let module = Arc::new(Module {
-            id: resolved_url.clone(),
-            source,
-            exports: HashMap::new(),
-            dependencies,
-            loaded: false,
-            loading: true,
-        });
-
-        {
-            let mut cache = self.module_cache.write().await;
-            cache.insert(resolved_url.clone(), module.clone());
-        }
-
-        for dep in &module.dependencies {
-            self.import_module(dep, Some(&resolved_url)).await?;
-        }
-
-        self.execute_module(&module).await?;
-
-        {
-            let mut cache = self.module_cache.write().await;
-            if let Some(cached_module) = cache.get_mut(&resolved_url) {
-                let module_mut = Arc::make_mut(cached_module);
-                module_mut.loaded = true;
-                module_mut.loading = false;
-            }
-        }
-
-        Ok(module)
     }
+    
+    let source = self.loader.load(&resolved_url).await?;
+    let dependencies = self.extract_dependencies(&source)?;
+   
+    let module = Arc::new(Module {
+        id: resolved_url.clone(),
+        source,
+        exports: HashMap::new(),
+        dependencies,
+        loaded: false,
+        loading: true,
+    });
+    
+    {
+        let mut cache = self.module_cache.write().await;
+        cache.insert(resolved_url.clone(), module.clone());
+    }
+    
+    for dep in &module.dependencies {
+        self.import_module(dep, Some(resolved_url.clone())).await?;
+    }
+    
+    self.execute_module(&module).await?;
+    
+    {
+        let mut cache = self.module_cache.write().await;
+        if let Some(cached_module) = cache.get_mut(&resolved_url) {
+            let module_mut = Arc::make_mut(cached_module);
+            module_mut.loaded = true;
+            module_mut.loading = false;
+        }
+    }
+    
+    Ok(module)
+}
 
     async fn execute_module(&self, module: &Module) -> Result<(), ModuleError> {
         log::info!("Executing module: {}", module.id);
@@ -190,7 +191,8 @@ impl ModuleLoader {
     async fn load_data_url(&self, url: &str) -> Result<String, ModuleError> {
         if let Some(comma_pos) = url.find(',') {
             let data_part = &url[comma_pos + 1..];
-            let decoded = base64::decode(data_part)
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(data_part)
                 .map_err(|e| ModuleError::LoadError(e.to_string()))?;
             String::from_utf8(decoded)
                 .map_err(|e| ModuleError::LoadError(e.to_string()))

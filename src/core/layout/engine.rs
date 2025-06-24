@@ -277,72 +277,73 @@ impl LayoutEngine {
     }
 
     #[async_recursion(?Send)]
-    async fn layout_node_recursive(
-        &self,
-        node_id: NodeId,
-        constraints: LayoutConstraints,
-        document: &Document,
-        style_engine: &StyleEngine,
-        generation: u64,
-    ) -> Result<LayoutResult> {
-        if let Some(cached) = self.get_cached_layout(node_id, &constraints, generation) {
-            let mut metrics = self.performance_metrics.write();
-            metrics.cache_hits += 1;
-            return Ok(cached.result);
-        }
-
+async fn layout_node_recursive(
+    &self,
+    node_id: NodeId,
+    constraints: LayoutConstraints,
+    document: &Document,
+    style_engine: &StyleEngine,
+    generation: u64,
+) -> Result<LayoutResult> {
+    if let Some(cached) = self.get_cached_layout(node_id, &constraints, generation) {
         let mut metrics = self.performance_metrics.write();
-        metrics.cache_misses += 1;
-        metrics.total_layouts += 1;
-        drop(metrics);
-
-        let computed_styles = style_engine.get_computed_styles(node_id)
-            .ok_or_else(|| LayoutError::Computation("No computed styles found".to_string()))?;
-
-        let display = self.get_display_type(&computed_styles)?;
-        
-        let result = match display {
-            DisplayType::None => {
-                LayoutResult::default()
-            }
-            DisplayType::Block => {
-                self.layout_block_node(node_id, constraints, document, style_engine, generation).await?
-            }
-            DisplayType::Inline => {
-                self.layout_inline_node(node_id, constraints, document, style_engine, generation).await?
-            }
-            DisplayType::InlineBlock => {
-                self.layout_inline_block_node(node_id, constraints, document, style_engine, generation).await?
-            }
-            DisplayType::Flex => {
-                self.flexbox_layout.layout_flex_container(
-                    node_id,
-                    constraints,
-                    document,
-                    style_engine,
-                    generation,
-                    self,
-                ).await?
-            }
-            DisplayType::Grid => {
-                self.grid_layout.layout_grid_container(
-                    node_id,
-                    constraints,
-                    document,
-                    style_engine,
-                    generation,
-                    self,
-                ).await?
-            }
-            _ => {
-                self.layout_block_node(node_id, constraints, document, style_engine, generation).await?
-            }
-        };
-
-        self.cache_layout_result(node_id, constraints.clone(), result.clone(), generation);
-
-        Ok(result)
+        metrics.cache_hits += 1;
+        return Ok(cached.result);
     }
+    
+    let mut metrics = self.performance_metrics.write();
+    metrics.cache_misses += 1;
+    metrics.total_layouts += 1;
+    drop(metrics);
+    
+    let computed_styles = style_engine.get_computed_styles(node_id)
+        .ok_or_else(|| LayoutError::Computation("No computed styles found".to_string()))?;
+    let display = self.get_display_type(&computed_styles)?;
+    
+    // Clone constraints early for caching later
+    let constraints_for_cache = constraints.clone();
+   
+    let result = match display {
+        DisplayType::None => {
+            LayoutResult::default()
+        }
+        DisplayType::Block => {
+            self.layout_block_node(node_id, constraints, document, style_engine, generation).await?
+        }
+        DisplayType::Inline => {
+            self.layout_inline_node(node_id, constraints, document, style_engine, generation).await?
+        }
+        DisplayType::InlineBlock => {
+            self.layout_inline_block_node(node_id, constraints, document, style_engine, generation).await?
+        }
+        DisplayType::Flex => {
+            self.flexbox_layout.layout_flex_container(
+                node_id,
+                constraints,
+                document,
+                style_engine,
+                generation,
+                self,
+            ).await?
+        }
+        DisplayType::Grid => {
+            self.grid_layout.layout_grid_container(
+                node_id,
+                constraints,
+                document,
+                style_engine,
+                generation,
+                self,
+            ).await?
+        }
+        _ => {
+            self.layout_block_node(node_id, constraints, document, style_engine, generation).await?
+        }
+    };
+    
+    self.cache_layout_result(node_id, constraints_for_cache, result.clone(), generation);
+    Ok(result)
+}
 
     async fn layout_block_node(
         &self,
