@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub struct GpuContext {
     device: Arc<ash::Device>,
-    memory_allocator: Arc<gpu_allocator::vulkan::Allocator>,
+    memory_allocator: Arc<std::sync::Mutex<gpu_allocator::vulkan::Allocator>>,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     queue_family_index: u32,
@@ -18,7 +18,7 @@ pub struct GpuContext {
 impl GpuContext {
     pub fn new(
         device: Arc<ash::Device>,
-        memory_allocator: Arc<gpu_allocator::vulkan::Allocator>,
+        memory_allocator: Arc<std::sync::Mutex<gpu_allocator::vulkan::Allocator>>,
         command_pool: vk::CommandPool,
         queue: vk::Queue,
         queue_family_index: u32,

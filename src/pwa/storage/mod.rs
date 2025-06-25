@@ -5,7 +5,6 @@ pub use quota::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
-use serde::{Deserialize, Serialize};
 
 pub struct StorageManager {
     storage_root: PathBuf,

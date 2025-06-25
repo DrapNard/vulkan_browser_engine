@@ -2,9 +2,10 @@ pub mod strategy;
 
 pub use strategy::*;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, BinaryHeap};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::cmp::Reverse;
 use tokio::fs;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,7 @@ pub struct Cache {
     strategy: CacheStrategy,
     max_size: u64,
     current_size: u64,
+    access_order: BinaryHeap<Reverse<AccessOrder>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,10 +43,15 @@ pub struct CachedResponse {
     pub body: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AccessOrder {
+    last_accessed: SystemTime,
+    url: String,
+}
+
 impl CacheManager {
     pub async fn new() -> Result<Self, CacheError> {
-        let cache_root = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("./cache"))
+        let cache_root = Self::get_cache_directory()
             .join("vulkan-renderer");
         
         fs::create_dir_all(&cache_root).await
@@ -53,9 +60,33 @@ impl CacheManager {
         Ok(Self {
             cache_root,
             caches: HashMap::new(),
-            global_quota: 50 * 1024 * 1024 * 1024, // 50GB
+            global_quota: 50 * 1024 * 1024 * 1024,
             used_space: 0,
         })
+    }
+
+    fn get_cache_directory() -> PathBuf {
+        std::env::var("CACHE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                if cfg!(target_os = "windows") {
+                    std::env::var("LOCALAPPDATA")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| PathBuf::from("./cache"))
+                } else if cfg!(target_os = "macos") {
+                    std::env::var("HOME")
+                        .map(|home| PathBuf::from(home).join("Library/Caches"))
+                        .unwrap_or_else(|_| PathBuf::from("./cache"))
+                } else {
+                    std::env::var("XDG_CACHE_HOME")
+                        .map(PathBuf::from)
+                        .or_else(|_| {
+                            std::env::var("HOME")
+                                .map(|home| PathBuf::from(home).join(".cache"))
+                        })
+                        .unwrap_or_else(|_| PathBuf::from("./cache"))
+                }
+            })
     }
 
     pub async fn open_cache(&mut self, name: &str) -> Result<&mut Cache, CacheError> {
@@ -68,7 +99,7 @@ impl CacheManager {
 
     pub async fn delete_cache(&mut self, name: &str) -> Result<bool, CacheError> {
         if let Some(cache) = self.caches.remove(name) {
-            self.used_space -= cache.current_size;
+            self.used_space = self.used_space.saturating_sub(cache.current_size);
             
             let cache_dir = self.cache_root.join(name);
             if cache_dir.exists() {
@@ -81,10 +112,13 @@ impl CacheManager {
         }
     }
 
-    pub async fn match_request(&self, request: &crate::pwa::FetchRequest) -> Result<Option<crate::pwa::FetchResponse>, CacheError> {
-        for cache in self.caches.values() {
-            if let Some(entry) = cache.match_url(&request.url).await {
-                if !self.is_expired(&entry) {
+    pub async fn match_request(&mut self, request: &crate::pwa::FetchRequest) -> Result<Option<crate::pwa::FetchResponse>, CacheError> {
+        for cache in self.caches.values_mut() {
+            if let Some(entry) = cache.match_url_mut(&request.url).await {
+                if !Self::is_expired(entry) {
+                    entry.access_count = entry.access_count.saturating_add(1);
+                    entry.last_accessed = SystemTime::now();
+                    
                     return Ok(Some(crate::pwa::FetchResponse {
                         status: entry.response.status,
                         headers: entry.response.headers.clone(),
@@ -97,8 +131,12 @@ impl CacheManager {
     }
 
     pub async fn add_to_cache(&mut self, cache_name: &str, url: &str, response: &crate::pwa::FetchResponse) -> Result<(), CacheError> {
-        let cache = self.open_cache(cache_name).await?;
+        let entry_size = response.body.len() as u64;
         
+        if self.used_space + entry_size > self.global_quota {
+            self.evict_global_entries().await?;
+        }
+
         let entry = CacheEntry {
             url: url.to_string(),
             response: CachedResponse {
@@ -107,25 +145,23 @@ impl CacheManager {
                 body: response.body.clone(),
             },
             stored_at: SystemTime::now(),
-            expires_at: self.calculate_expiry(&response.headers),
-            size: response.body.len() as u64,
-            access_count: 0,
+            expires_at: Self::calculate_expiry(&response.headers),
+            size: entry_size,
+            access_count: 1,
             last_accessed: SystemTime::now(),
         };
 
-        if self.used_space + entry.size > self.global_quota {
-            self.evict_entries().await?;
-        }
-
+        let cache = self.open_cache(cache_name).await?;
         cache.put(url, entry).await?;
-        self.used_space += response.body.len() as u64;
+        self.used_space += entry_size;
         
         Ok(())
     }
 
     pub async fn clear_app_cache(&mut self, app_id: &str) -> Result<(), CacheError> {
+        let cache_prefix = format!("app_{}_", app_id);
         let caches_to_remove: Vec<String> = self.caches.keys()
-            .filter(|name| name.starts_with(&format!("app_{}_", app_id)))
+            .filter(|name| name.starts_with(&cache_prefix))
             .cloned()
             .collect();
         
@@ -136,26 +172,35 @@ impl CacheManager {
         Ok(())
     }
 
-    async fn evict_entries(&mut self) -> Result<(), CacheError> {
-        let mut entries_to_remove = Vec::new();
+    async fn evict_global_entries(&mut self) -> Result<(), CacheError> {
+        let mut eviction_candidates = Vec::new();
         
         for (cache_name, cache) in &self.caches {
             for (url, entry) in &cache.entries {
-                if self.is_expired(entry) || entry.access_count == 0 {
-                    entries_to_remove.push((cache_name.clone(), url.clone()));
+                if Self::is_expired(entry) {
+                    eviction_candidates.push((cache_name.clone(), url.clone(), 0u64, entry.size));
+                } else {
+                    let priority = Self::calculate_eviction_priority(entry);
+                    eviction_candidates.push((cache_name.clone(), url.clone(), priority, entry.size));
                 }
             }
         }
         
-        entries_to_remove.sort_by_key(|(_, _)| {
-            // Sort by access count and last accessed time
-            0
-        });
+        eviction_candidates.sort_by_key(|&(_, _, priority, _)| priority);
         
-        for (cache_name, url) in entries_to_remove.iter().take(100) {
-            if let Some(cache) = self.caches.get_mut(cache_name) {
-                if let Some(entry) = cache.entries.remove(url) {
-                    self.used_space -= entry.size;
+        let mut freed_space = 0u64;
+        let target_space = self.global_quota / 10;
+        
+        for (cache_name, url, _, size) in eviction_candidates {
+            if freed_space >= target_space {
+                break;
+            }
+            
+            if let Some(cache) = self.caches.get_mut(&cache_name) {
+                if cache.entries.remove(&url).is_some() {
+                    cache.current_size = cache.current_size.saturating_sub(size);
+                    self.used_space = self.used_space.saturating_sub(size);
+                    freed_space += size;
                 }
             }
         }
@@ -163,32 +208,67 @@ impl CacheManager {
         Ok(())
     }
 
-    fn is_expired(&self, entry: &CacheEntry) -> bool {
-        if let Some(expires_at) = entry.expires_at {
-            SystemTime::now() > expires_at
-        } else {
-            false
-        }
+    fn calculate_eviction_priority(entry: &CacheEntry) -> u64 {
+        let age_weight = entry.stored_at
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let access_weight = entry.access_count as u64 * 1000;
+        let recency_weight = entry.last_accessed
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        age_weight.saturating_sub(access_weight).saturating_sub(recency_weight / 10)
     }
 
-    fn calculate_expiry(&self, headers: &HashMap<String, String>) -> Option<SystemTime> {
+    fn is_expired(entry: &CacheEntry) -> bool {
+        entry.expires_at
+            .map(|expires_at| SystemTime::now() > expires_at)
+            .unwrap_or(false)
+    }
+
+    fn calculate_expiry(headers: &HashMap<String, String>) -> Option<SystemTime> {
         if let Some(cache_control) = headers.get("cache-control") {
-            if let Some(max_age_start) = cache_control.find("max-age=") {
-                let max_age_str = &cache_control[max_age_start + 8..];
-                if let Some(max_age_end) = max_age_str.find(',') {
-                    let max_age_str = &max_age_str[..max_age_end];
-                    if let Ok(max_age) = max_age_str.trim().parse::<u64>() {
-                        return Some(SystemTime::now() + Duration::from_secs(max_age));
-                    }
-                } else if let Ok(max_age) = max_age_str.trim().parse::<u64>() {
-                    return Some(SystemTime::now() + Duration::from_secs(max_age));
-                }
+            if let Some(max_age) = Self::extract_max_age(cache_control) {
+                return Some(SystemTime::now() + Duration::from_secs(max_age));
             }
         }
         
-        if let Some(_expires) = headers.get("expires") {
-            // Parse HTTP date format
-            // For simplicity, returning None here
+        if let Some(expires_header) = headers.get("expires") {
+            if let Some(expires_time) = Self::parse_http_date(expires_header) {
+                return Some(expires_time);
+            }
+        }
+        
+        None
+    }
+
+    fn extract_max_age(cache_control: &str) -> Option<u64> {
+        cache_control
+            .split(',')
+            .find_map(|directive| {
+                let directive = directive.trim();
+                if directive.starts_with("max-age=") {
+                    directive[8..].trim().parse().ok()
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn parse_http_date(date_str: &str) -> Option<SystemTime> {
+        let formats = [
+            "%a, %d %b %Y %H:%M:%S GMT",
+            "%A, %d-%b-%y %H:%M:%S GMT", 
+            "%a %b %d %H:%M:%S %Y",
+        ];
+        
+        for format in &formats {
+            if let Ok(datetime) = chrono::DateTime::parse_from_str(date_str, format) {
+                return Some(UNIX_EPOCH + Duration::from_secs(datetime.timestamp() as u64));
+            }
         }
         
         None
@@ -202,6 +282,28 @@ impl CacheManager {
             usage_percentage: (self.used_space as f64 / self.global_quota as f64) * 100.0,
         }
     }
+
+    pub async fn cleanup_expired(&mut self) -> Result<u64, CacheError> {
+        let mut cleaned_size = 0u64;
+        
+        for cache in self.caches.values_mut() {
+            let expired_urls: Vec<String> = cache.entries
+                .iter()
+                .filter(|(_, entry)| Self::is_expired(entry))
+                .map(|(url, _)| url.clone())
+                .collect();
+            
+            for url in expired_urls {
+                if let Some(entry) = cache.entries.remove(&url) {
+                    cache.current_size = cache.current_size.saturating_sub(entry.size);
+                    cleaned_size += entry.size;
+                }
+            }
+        }
+        
+        self.used_space = self.used_space.saturating_sub(cleaned_size);
+        Ok(cleaned_size)
+    }
 }
 
 impl Cache {
@@ -210,37 +312,55 @@ impl Cache {
             name,
             entries: HashMap::new(),
             strategy,
-            max_size: 100 * 1024 * 1024, // 100MB per cache
+            max_size: 100 * 1024 * 1024,
             current_size: 0,
+            access_order: BinaryHeap::new(),
         })
     }
 
-    async fn match_url(&self, url: &str) -> Option<&CacheEntry> {
-        self.entries.get(url)
+    async fn match_url_mut(&mut self, url: &str) -> Option<&mut CacheEntry> {
+        self.entries.get_mut(url)
     }
 
     async fn put(&mut self, url: &str, entry: CacheEntry) -> Result<(), CacheError> {
-        if self.current_size + entry.size > self.max_size {
+        while self.current_size + entry.size > self.max_size && !self.entries.is_empty() {
             self.evict_lru().await?;
         }
         
+        if entry.size > self.max_size {
+            return Err(CacheError::QuotaExceeded);
+        }
+        
+        if let Some(old_entry) = self.entries.remove(url) {
+            self.current_size = self.current_size.saturating_sub(old_entry.size);
+        }
+        
+        self.access_order.push(Reverse(AccessOrder {
+            last_accessed: entry.last_accessed,
+            url: url.to_string(),
+        }));
+        
         self.current_size += entry.size;
         self.entries.insert(url.to_string(), entry);
+        
         Ok(())
     }
 
     async fn evict_lru(&mut self) -> Result<(), CacheError> {
-        let mut oldest_entry: Option<(String, SystemTime)> = None;
-        
-        for (url, entry) in &self.entries {
-            if oldest_entry.is_none() || entry.last_accessed < oldest_entry.as_ref().unwrap().1 {
-                oldest_entry = Some((url.clone(), entry.last_accessed));
+        while let Some(Reverse(access_order)) = self.access_order.pop() {
+            if let Some(entry) = self.entries.get(&access_order.url) {
+                if entry.last_accessed == access_order.last_accessed {
+                    let removed_entry = self.entries.remove(&access_order.url).unwrap();
+                    self.current_size = self.current_size.saturating_sub(removed_entry.size);
+                    return Ok(());
+                }
             }
         }
         
-        if let Some((url, _)) = oldest_entry {
+        if let Some((url, _)) = self.entries.iter().next() {
+            let url = url.clone();
             if let Some(entry) = self.entries.remove(&url) {
-                self.current_size -= entry.size;
+                self.current_size = self.current_size.saturating_sub(entry.size);
             }
         }
         
@@ -268,10 +388,4 @@ pub enum CacheError {
     QuotaExceeded,
     #[error("Invalid cache entry")]
     InvalidEntry,
-}
-
-impl Default for CacheManager {
-    fn default() -> Self {
-        futures::executor::block_on(async { Self::new().await.unwrap() })
-    }
 }
