@@ -826,7 +826,7 @@ impl NetworkManager {
         self.http_cache.get_stats()
     }
 
-    pub fn update_security_policy(&self, policy: SecurityPolicy) {
+    pub fn update_security_policy(&self, _policy: SecurityPolicy) {
         // In a real implementation, this would need proper synchronization
         // For now, we'll note that this is a design limitation
     }

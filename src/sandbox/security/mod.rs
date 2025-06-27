@@ -1,38 +1,9 @@
-pub mod policy;
-
-pub use policy::*;
-
 use serde::{Deserialize, Serialize};
-use std::hash::{Hash, Hasher};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use tracing::log;
-
-pub struct SecurityFramework {
-    policy_engine: Arc<RwLock<SecurityPolicyEngine>>,
-    threat_detector: ThreatDetector,
-    incident_responder: IncidentResponder,
-    compliance_monitor: ComplianceMonitor,
-}
-
-pub struct ThreatDetector {
-    detection_rules: Vec<DetectionRule>,
-    anomaly_detector: AnomalyDetector,
-    behavior_analyzer: BehaviorAnalyzer,
-}
-
-pub struct IncidentResponder {
-    response_policies: HashMap<ThreatLevel, ResponseAction>,
-    quarantine_manager: QuarantineManager,
-    alert_system: AlertSystem,
-}
-
-pub struct ComplianceMonitor {
-    compliance_frameworks: Vec<ComplianceFramework>,
-    audit_trail: Arc<RwLock<Vec<ComplianceEvent>>>,
-    violation_tracker: ViolationTracker,
-}
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityEvent {
@@ -67,12 +38,12 @@ pub enum SecuritySeverity {
     Info = 4,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ThreatLevel {
-    Critical,
-    High,
-    Medium,
-    Low,
+    Critical = 0,
+    High = 1,
+    Medium = 2,
+    Low = 3,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -87,27 +58,84 @@ pub enum ResponseAction {
     Investigate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RiskLevel {
+    Critical,
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum ComplianceFramework {
+    Gdpr,
+    Hipaa,
+    Sox,
+    PciDss,
+    Iso27001,
+    Nist,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyViolation {
+    pub rule_id: String,
+    pub description: String,
+    pub severity: SecuritySeverity,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecurityAnalysisResult {
+    pub event_id: Uuid,
+    pub threat_level: ThreatLevel,
+    pub threat_score: f64,
+    pub policy_violations: Vec<PolicyViolation>,
+    pub recommended_actions: Vec<ResponseAction>,
+    pub compliance_impact: ComplianceImpact,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThreatAnalysis {
+    pub threat_score: f64,
+    pub matched_rules: Vec<String>,
+    pub anomaly_indicators: Vec<String>,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct BehaviorAnalysis {
+    pub risk_score: f64,
+    pub behavioral_indicators: Vec<String>,
+    pub pattern_matches: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecurityStatus {
+    pub overall_risk_level: RiskLevel,
+    pub active_threats: usize,
+    pub quarantined_processes: usize,
+    pub compliance_score: f64,
+    pub last_assessment: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComplianceImpact {
+    pub affected_frameworks: Vec<ComplianceFramework>,
+    pub risk_level: RiskLevel,
+    pub required_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 struct DetectionRule {
     id: String,
     name: String,
     pattern: String,
     severity: SecuritySeverity,
     enabled: bool,
+    base_score: f64,
     false_positive_rate: f64,
 }
 
-struct AnomalyDetector {
-    baseline_models: HashMap<u32, ProcessBaseline>,
-    anomaly_threshold: f64,
-    learning_enabled: bool,
-}
-
-struct BehaviorAnalyzer {
-    behavior_patterns: HashMap<String, BehaviorPattern>,
-    risk_scores: HashMap<u32, f64>,
-    analysis_window: std::time::Duration,
-}
-
+#[derive(Debug, Clone)]
 struct ProcessBaseline {
     normal_memory_usage: f64,
     normal_cpu_usage: f64,
@@ -116,24 +144,12 @@ struct ProcessBaseline {
     confidence_level: f64,
 }
 
+#[derive(Debug, Clone)]
 struct BehaviorPattern {
     pattern_name: String,
     indicators: Vec<String>,
     risk_weight: f64,
-    time_window: std::time::Duration,
-}
-
-struct QuarantineManager {
-    quarantined_processes: HashSet<u32>,
-    quarantine_policies: HashMap<ThreatLevel, QuarantinePolicy>,
-}
-
-struct QuarantinePolicy {
-    isolation_level: IsolationLevel,
-    resource_limits: QuarantineResourceLimits,
-    network_isolation: bool,
-    file_system_isolation: bool,
-    duration: Option<std::time::Duration>,
+    time_window: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +160,7 @@ enum IsolationLevel {
     Suspended,
 }
 
+#[derive(Debug, Clone)]
 struct QuarantineResourceLimits {
     max_memory: u64,
     max_cpu: u8,
@@ -151,10 +168,13 @@ struct QuarantineResourceLimits {
     max_file_operations: u32,
 }
 
-struct AlertSystem {
-    alert_channels: Vec<AlertChannel>,
-    escalation_rules: Vec<EscalationRule>,
-    notification_history: Vec<NotificationRecord>,
+#[derive(Debug, Clone)]
+struct QuarantinePolicy {
+    isolation_level: IsolationLevel,
+    resource_limits: QuarantineResourceLimits,
+    network_isolation: bool,
+    file_system_isolation: bool,
+    duration: Option<Duration>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,44 +186,27 @@ enum AlertChannel {
     Sms(String),
 }
 
-struct EscalationRule {
-    trigger_condition: EscalationTrigger,
-    escalation_delay: std::time::Duration,
-    target_channels: Vec<AlertChannel>,
-}
-
 #[derive(Debug, Clone)]
 enum EscalationTrigger {
     SeverityLevel(SecuritySeverity),
     ThreatScore(f64),
     RepeatedViolations(u32),
-    TimeWindow(std::time::Duration),
+    TimeWindow(Duration),
 }
 
+#[derive(Debug, Clone)]
+struct EscalationRule {
+    trigger_condition: EscalationTrigger,
+    escalation_delay: Duration,
+    target_channels: Vec<AlertChannel>,
+}
+
+#[derive(Debug, Clone)]
 struct NotificationRecord {
     timestamp: u64,
     channel: AlertChannel,
     message: String,
     acknowledged: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum ComplianceFramework {
-    GDPR,
-    HIPAA,
-    SOX,
-    PCI_DSS,
-    ISO27001,
-    NIST,
-}
-
-struct ComplianceEvent {
-    timestamp: u64,
-    framework: ComplianceFramework,
-    requirement: String,
-    status: ComplianceStatus,
-    evidence: Vec<String>,
-    risk_level: RiskLevel,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -214,20 +217,17 @@ enum ComplianceStatus {
     UnderReview,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RiskLevel {
-    Critical,
-    High,
-    Medium,
-    Low,
+#[derive(Debug, Clone)]
+struct ComplianceEvent {
+    timestamp: u64,
+    framework: ComplianceFramework,
+    requirement: String,
+    status: ComplianceStatus,
+    evidence: Vec<String>,
+    risk_level: RiskLevel,
 }
 
-struct ViolationTracker {
-    violations_by_process: HashMap<u32, Vec<ComplianceViolation>>,
-    violation_patterns: HashMap<String, u32>,
-    remediation_actions: HashMap<String, RemediationAction>,
-}
-
+#[derive(Debug, Clone)]
 struct ComplianceViolation {
     timestamp: u64,
     process_id: u32,
@@ -238,52 +238,108 @@ struct ComplianceViolation {
     auto_remediated: bool,
 }
 
+#[derive(Debug, Clone)]
 struct RemediationAction {
     action_type: String,
     automated: bool,
     success_rate: f64,
-    execution_time: std::time::Duration,
+    execution_time: Duration,
+}
+
+pub struct SecurityFramework {
+    threat_detector: ThreatDetector,
+    incident_responder: IncidentResponder,
+    compliance_monitor: ComplianceMonitor,
+    active_threats: Arc<RwLock<Vec<SecurityEvent>>>,
+}
+
+struct ThreatDetector {
+    detection_rules: Vec<DetectionRule>,
+    anomaly_detector: AnomalyDetector,
+    behavior_analyzer: BehaviorAnalyzer,
+}
+
+struct IncidentResponder {
+    response_policies: HashMap<ThreatLevel, ResponseAction>,
+    quarantine_manager: QuarantineManager,
+    alert_system: AlertSystem,
+}
+
+struct ComplianceMonitor {
+    compliance_frameworks: Vec<ComplianceFramework>,
+    audit_trail: Arc<RwLock<Vec<ComplianceEvent>>>,
+    violation_tracker: ViolationTracker,
+}
+
+struct AnomalyDetector {
+    baseline_models: HashMap<u32, ProcessBaseline>,
+    anomaly_threshold: f64,
+    learning_enabled: bool,
+}
+
+struct BehaviorAnalyzer {
+    behavior_patterns: HashMap<String, BehaviorPattern>,
+    risk_scores: HashMap<u32, f64>,
+    analysis_window: Duration,
+}
+
+struct QuarantineManager {
+    quarantined_processes: Arc<RwLock<HashSet<u32>>>,
+    quarantine_policies: HashMap<ThreatLevel, QuarantinePolicy>,
+}
+
+struct AlertSystem {
+    alert_channels: Vec<AlertChannel>,
+    escalation_rules: Vec<EscalationRule>,
+    notification_history: Vec<NotificationRecord>,
+}
+
+struct ViolationTracker {
+    violations_by_process: HashMap<u32, Vec<ComplianceViolation>>,
+    violation_patterns: HashMap<String, u32>,
+    remediation_actions: HashMap<String, RemediationAction>,
 }
 
 impl SecurityFramework {
     pub fn new() -> Self {
         Self {
-            policy_engine: Arc::new(RwLock::new(SecurityPolicyEngine::new())),
             threat_detector: ThreatDetector::new(),
             incident_responder: IncidentResponder::new(),
             compliance_monitor: ComplianceMonitor::new(),
+            active_threats: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
     pub async fn analyze_security_event(&self, event: SecurityEvent) -> SecurityAnalysisResult {
-        let policy_result = {
-            let policy_engine = self.policy_engine.read().await;
-            policy_engine.evaluate_event(&event).await
-        };
-
         let threat_analysis = self.threat_detector.analyze_threat(&event).await;
         let behavioral_analysis = self.threat_detector.analyze_behavior(&event).await;
 
         let combined_threat_score = (threat_analysis.threat_score + behavioral_analysis.risk_score) / 2.0;
-        let threat_level = self.calculate_threat_level(combined_threat_score, event.severity);
+        let threat_level = Self::calculate_threat_level(combined_threat_score, event.severity);
 
-        if threat_level >= ThreatLevel::Medium {
+        if threat_level <= ThreatLevel::Medium {
             self.incident_responder.respond_to_incident(&event, threat_level).await;
         }
 
+        let compliance_impact = self.compliance_monitor.assess_impact(&event).await;
         self.compliance_monitor.check_compliance(&event).await;
 
+        {
+            let mut threats = self.active_threats.write().await;
+            threats.push(event.clone());
+        }
+
         SecurityAnalysisResult {
-            event_id: uuid::Uuid::new_v4(),
+            event_id: Uuid::new_v4(),
             threat_level,
             threat_score: combined_threat_score,
-            policy_violations: policy_result.violations,
-            recommended_actions: self.get_recommended_actions(threat_level, &event).await,
-            compliance_impact: self.compliance_monitor.assess_impact(&event).await,
+            policy_violations: self.generate_policy_violations(&threat_analysis),
+            recommended_actions: Self::get_recommended_actions(threat_level),
+            compliance_impact,
         }
     }
 
-    fn calculate_threat_level(&self, score: f64, severity: SecuritySeverity) -> ThreatLevel {
+    fn calculate_threat_level(score: f64, severity: SecuritySeverity) -> ThreatLevel {
         match (score, severity) {
             (s, SecuritySeverity::Critical) if s > 0.7 => ThreatLevel::Critical,
             (s, SecuritySeverity::High) if s > 0.6 => ThreatLevel::High,
@@ -294,7 +350,7 @@ impl SecurityFramework {
         }
     }
 
-    async fn get_recommended_actions(&self, threat_level: ThreatLevel, event: &SecurityEvent) -> Vec<ResponseAction> {
+    fn get_recommended_actions(threat_level: ThreatLevel) -> Vec<ResponseAction> {
         match threat_level {
             ThreatLevel::Critical => vec![ResponseAction::Terminate, ResponseAction::Alert, ResponseAction::Investigate],
             ThreatLevel::High => vec![ResponseAction::Quarantine, ResponseAction::Alert],
@@ -303,22 +359,29 @@ impl SecurityFramework {
         }
     }
 
+    fn generate_policy_violations(&self, analysis: &ThreatAnalysis) -> Vec<PolicyViolation> {
+        analysis.matched_rules.iter().map(|rule_id| PolicyViolation {
+            rule_id: rule_id.clone(),
+            description: format!("Security rule {} triggered", rule_id),
+            severity: SecuritySeverity::High,
+        }).collect()
+    }
+
     pub async fn get_security_status(&self) -> SecurityStatus {
-        let policy_engine = self.policy_engine.read().await;
-        let active_threats = self.threat_detector.get_active_threats().await;
-        let quarantined_processes = self.incident_responder.get_quarantined_processes().await;
+        let active_threats = self.active_threats.read().await;
+        let quarantined_count = self.incident_responder.get_quarantined_count().await;
         let compliance_score = self.compliance_monitor.get_compliance_score().await;
 
         SecurityStatus {
-            overall_risk_level: self.calculate_overall_risk(&active_threats).await,
+            overall_risk_level: Self::calculate_overall_risk(&active_threats),
             active_threats: active_threats.len(),
-            quarantined_processes: quarantined_processes.len(),
+            quarantined_processes: quarantined_count,
             compliance_score,
-            last_assessment: std::time::Instant::now(),
+            last_assessment: Instant::now(),
         }
     }
 
-    async fn calculate_overall_risk(&self, threats: &[SecurityEvent]) -> RiskLevel {
+    fn calculate_overall_risk(threats: &[SecurityEvent]) -> RiskLevel {
         if threats.iter().any(|t| t.severity == SecuritySeverity::Critical) {
             RiskLevel::Critical
         } else if threats.iter().any(|t| t.severity == SecuritySeverity::High) {
@@ -348,6 +411,7 @@ impl ThreatDetector {
                 pattern: "setuid|setgid|sudo".to_string(),
                 severity: SecuritySeverity::High,
                 enabled: true,
+                base_score: 0.8,
                 false_positive_rate: 0.05,
             },
             DetectionRule {
@@ -356,6 +420,7 @@ impl ThreatDetector {
                 pattern: "connect.*rapid_succession".to_string(),
                 severity: SecuritySeverity::Medium,
                 enabled: true,
+                base_score: 0.6,
                 false_positive_rate: 0.1,
             },
         ]
@@ -366,20 +431,20 @@ impl ThreatDetector {
         let mut matched_rules = Vec::new();
 
         for rule in &self.detection_rules {
-            if rule.enabled && self.matches_pattern(&rule.pattern, event) {
-                threat_score += self.calculate_rule_score(rule, event);
+            if rule.enabled && Self::matches_pattern(&rule.pattern, event) {
+                threat_score += Self::calculate_rule_score(rule);
                 matched_rules.push(rule.id.clone());
             }
         }
 
         let anomaly_score = self.anomaly_detector.calculate_anomaly_score(event).await;
-        threat_score = (threat_score + anomaly_score) / 2.0;
+        threat_score = ((threat_score + anomaly_score) / 2.0).min(1.0);
 
         ThreatAnalysis {
-            threat_score: threat_score.min(1.0),
-            matched_rules,
+            threat_score,
+            matched_rules: matched_rules.clone(),
             anomaly_indicators: self.anomaly_detector.get_indicators(event).await,
-            confidence: self.calculate_confidence(threat_score, &matched_rules),
+            confidence: Self::calculate_confidence(threat_score, &matched_rules),
         }
     }
 
@@ -387,34 +452,17 @@ impl ThreatDetector {
         self.behavior_analyzer.analyze(event).await
     }
 
-    fn matches_pattern(&self, pattern: &str, event: &SecurityEvent) -> bool {
-        event.details.values().any(|value| {
-            regex::Regex::new(pattern)
-                .map(|re| re.is_match(value))
-                .unwrap_or(false)
-        })
+    fn matches_pattern(pattern: &str, event: &SecurityEvent) -> bool {
+        event.details.values().any(|value| value.contains(pattern))
     }
 
-    fn calculate_rule_score(&self, rule: &DetectionRule, event: &SecurityEvent) -> f64 {
-        let base_score = match rule.severity {
-            SecuritySeverity::Critical => 0.9,
-            SecuritySeverity::High => 0.7,
-            SecuritySeverity::Medium => 0.5,
-            SecuritySeverity::Low => 0.3,
-            SecuritySeverity::Info => 0.1,
-        };
-
-        base_score * (1.0 - rule.false_positive_rate)
+    fn calculate_rule_score(rule: &DetectionRule) -> f64 {
+        rule.base_score * (1.0 - rule.false_positive_rate)
     }
 
-    fn calculate_confidence(&self, threat_score: f64, matched_rules: &[String]) -> f64 {
+    fn calculate_confidence(threat_score: f64, matched_rules: &[String]) -> f64 {
         let rule_confidence = if matched_rules.is_empty() { 0.0 } else { 0.8 };
-        let score_confidence = threat_score;
-        (rule_confidence + score_confidence) / 2.0
-    }
-
-    async fn get_active_threats(&self) -> Vec<SecurityEvent> {
-        Vec::new()
+        (rule_confidence + threat_score) / 2.0
     }
 }
 
@@ -428,18 +476,16 @@ impl AnomalyDetector {
     }
 
     async fn calculate_anomaly_score(&self, event: &SecurityEvent) -> f64 {
-        if let Some(baseline) = self.baseline_models.get(&event.source_process) {
-            self.compare_to_baseline(event, baseline)
-        } else {
-            0.0
-        }
+        self.baseline_models.get(&event.source_process)
+            .map(|baseline| Self::compare_to_baseline(baseline))
+            .unwrap_or(0.0)
     }
 
-    fn compare_to_baseline(&self, event: &SecurityEvent, baseline: &ProcessBaseline) -> f64 {
+    fn compare_to_baseline(_baseline: &ProcessBaseline) -> f64 {
         0.0
     }
 
-    async fn get_indicators(&self, event: &SecurityEvent) -> Vec<String> {
+    async fn get_indicators(&self, _event: &SecurityEvent) -> Vec<String> {
         Vec::new()
     }
 }
@@ -449,7 +495,7 @@ impl BehaviorAnalyzer {
         Self {
             behavior_patterns: Self::load_behavior_patterns(),
             risk_scores: HashMap::new(),
-            analysis_window: std::time::Duration::from_secs(300),
+            analysis_window: Duration::from_secs(300),
         }
     }
 
@@ -460,17 +506,17 @@ impl BehaviorAnalyzer {
             pattern_name: "Rapid Process Execution".to_string(),
             indicators: vec!["high_process_creation_rate".to_string()],
             risk_weight: 0.6,
-            time_window: std::time::Duration::from_secs(60),
+            time_window: Duration::from_secs(60),
         });
 
         patterns
     }
 
     async fn analyze(&self, event: &SecurityEvent) -> BehaviorAnalysis {
-        let current_score = self.risk_scores.get(&event.source_process).unwrap_or(&0.0);
+        let current_score = self.risk_scores.get(&event.source_process).copied().unwrap_or(0.0);
         
         BehaviorAnalysis {
-            risk_score: *current_score,
+            risk_score: current_score,
             behavioral_indicators: Vec::new(),
             pattern_matches: Vec::new(),
         }
@@ -494,38 +540,45 @@ impl IncidentResponder {
 
     async fn respond_to_incident(&self, event: &SecurityEvent, threat_level: ThreatLevel) {
         if let Some(action) = self.response_policies.get(&threat_level) {
-            match action {
-                ResponseAction::Terminate => {
-                    log::error!("CRITICAL: Terminating process {} due to security threat", event.source_process);
-                }
-                ResponseAction::Quarantine => {
-                    self.quarantine_manager.quarantine_process(event.source_process, threat_level).await;
-                }
-                ResponseAction::Block => {
-                    log::warn!("Blocking suspicious activity from process {}", event.source_process);
-                }
-                ResponseAction::Alert => {
-                    self.alert_system.send_alert(event, threat_level).await;
-                }
-                ResponseAction::Log => {
-                    log::info!("Security event logged: {:?}", event);
-                }
-                ResponseAction::Investigate => {
-                    log::info!("Investigation triggered for process {}", event.source_process);
-                }
+            self.execute_response_action(action, event, threat_level).await;
+        }
+    }
+
+    async fn execute_response_action(&self, action: &ResponseAction, event: &SecurityEvent, threat_level: ThreatLevel) {
+        match action {
+            ResponseAction::Terminate => {
+                tracing::error!("CRITICAL: Terminating process {} due to security threat", event.source_process);
+            }
+            ResponseAction::Quarantine => {
+                self.quarantine_manager.quarantine_process(event.source_process, threat_level).await;
+            }
+            ResponseAction::Block => {
+                tracing::warn!("Blocking suspicious activity from process {}", event.source_process);
+            }
+            ResponseAction::Alert => {
+                self.alert_system.send_alert(event, threat_level).await;
+            }
+            ResponseAction::Log => {
+                tracing::info!("Security event logged: {:?}", event);
+            }
+            ResponseAction::Investigate => {
+                tracing::info!("Investigation triggered for process {}", event.source_process);
+            }
+            ResponseAction::Allow | ResponseAction::Deny => {
+                tracing::debug!("Access control action: {:?} for process {}", action, event.source_process);
             }
         }
     }
 
-    async fn get_quarantined_processes(&self) -> Vec<u32> {
-        self.quarantine_manager.get_quarantined_processes().await
+    async fn get_quarantined_count(&self) -> usize {
+        self.quarantine_manager.get_quarantined_count().await
     }
 }
 
 impl QuarantineManager {
     fn new() -> Self {
         Self {
-            quarantined_processes: HashSet::new(),
+            quarantined_processes: Arc::new(RwLock::new(HashSet::new())),
             quarantine_policies: Self::create_default_policies(),
         }
     }
@@ -550,11 +603,13 @@ impl QuarantineManager {
     }
 
     async fn quarantine_process(&self, process_id: u32, threat_level: ThreatLevel) {
-        log::warn!("Quarantining process {} with threat level {:?}", process_id, threat_level);
+        let mut quarantined = self.quarantined_processes.write().await;
+        quarantined.insert(process_id);
+        tracing::warn!("Quarantining process {} with threat level {:?}", process_id, threat_level);
     }
 
-    async fn get_quarantined_processes(&self) -> Vec<u32> {
-        self.quarantined_processes.iter().cloned().collect()
+    async fn get_quarantined_count(&self) -> usize {
+        self.quarantined_processes.read().await.len()
     }
 }
 
@@ -575,22 +630,25 @@ impl AlertSystem {
             threat_level, event.source_process);
         
         for channel in &self.alert_channels {
-            match channel {
-                AlertChannel::SystemLog => {
-                    log::error!("{}", message);
-                }
-                AlertChannel::Dashboard => {
-                    // Send to dashboard
-                }
-                AlertChannel::Email(addr) => {
-                    log::info!("Sending email alert to {}: {}", addr, message);
-                }
-                AlertChannel::Webhook(url) => {
-                    log::info!("Sending webhook to {}: {}", url, message);
-                }
-                AlertChannel::Sms(number) => {
-                    log::info!("Sending SMS to {}: {}", number, message);
-                }
+            self.send_to_channel(channel, &message).await;
+        }
+    }
+
+    async fn send_to_channel(&self, channel: &AlertChannel, message: &str) {
+        match channel {
+            AlertChannel::SystemLog => {
+                tracing::error!("{}", message);
+            }
+            AlertChannel::Dashboard => {
+            }
+            AlertChannel::Email(addr) => {
+                tracing::info!("Sending email alert to {}: {}", addr, message);
+            }
+            AlertChannel::Webhook(url) => {
+                tracing::info!("Sending webhook to {}: {}", url, message);
+            }
+            AlertChannel::Sms(number) => {
+                tracing::info!("Sending SMS to {}: {}", number, message);
             }
         }
     }
@@ -600,8 +658,8 @@ impl ComplianceMonitor {
     fn new() -> Self {
         Self {
             compliance_frameworks: vec![
-                ComplianceFramework::GDPR,
-                ComplianceFramework::ISO27001,
+                ComplianceFramework::Gdpr,
+                ComplianceFramework::Iso27001,
             ],
             audit_trail: Arc::new(RwLock::new(Vec::new())),
             violation_tracker: ViolationTracker::new(),
@@ -616,7 +674,7 @@ impl ComplianceMonitor {
 
     async fn check_framework_compliance(&self, framework: &ComplianceFramework, event: &SecurityEvent) {
         let compliance_event = ComplianceEvent {
-            timestamp: event.timestamp,
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             framework: framework.clone(),
             requirement: "Data Protection".to_string(),
             status: ComplianceStatus::Compliant,
@@ -633,7 +691,7 @@ impl ComplianceMonitor {
         audit_trail.push(compliance_event);
     }
 
-    async fn assess_impact(&self, event: &SecurityEvent) -> ComplianceImpact {
+    async fn assess_impact(&self, _event: &SecurityEvent) -> ComplianceImpact {
         ComplianceImpact {
             affected_frameworks: self.compliance_frameworks.clone(),
             risk_level: RiskLevel::Low,
@@ -656,59 +714,8 @@ impl ViolationTracker {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SecurityAnalysisResult {
-    pub event_id: uuid::Uuid,
-    pub threat_level: ThreatLevel,
-    pub threat_score: f64,
-    pub policy_violations: Vec<String>,
-    pub recommended_actions: Vec<ResponseAction>,
-    pub compliance_impact: ComplianceImpact,
-}
-
-#[derive(Debug, Clone)]
-pub struct ThreatAnalysis {
-    pub threat_score: f64,
-    pub matched_rules: Vec<String>,
-    pub anomaly_indicators: Vec<String>,
-    pub confidence: f64,
-}
-
-#[derive(Debug, Clone)]
-pub struct BehaviorAnalysis {
-    pub risk_score: f64,
-    pub behavioral_indicators: Vec<String>,
-    pub pattern_matches: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SecurityStatus {
-    pub overall_risk_level: RiskLevel,
-    pub active_threats: usize,
-    pub quarantined_processes: usize,
-    pub compliance_score: f64,
-    pub last_assessment: std::time::Instant,
-}
-
-#[derive(Debug, Clone)]
-pub struct ComplianceImpact {
-    pub affected_frameworks: Vec<ComplianceFramework>,
-    pub risk_level: RiskLevel,
-    pub required_actions: Vec<String>,
-}
-
 impl Default for SecurityFramework {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl SecurityEngine {
-    fn calculate_rule_score(&self, rule: &DetectionRule, _event: &SecurityEvent) -> f64 {
-        rule.base_score
-    }
-
-    fn compare_to_baseline(&self, _event: &SecurityEvent, _baseline: &ProcessBaseline) -> f64 {
-        0.5
     }
 }

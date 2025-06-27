@@ -22,7 +22,7 @@ impl ImageManager {
         }
     }
 
-    pub async fn load_texture(&self, url: &str) -> Result<Arc<Texture>, ImageError> {
+    pub async fn load_texture(&self, url: &str, gpu_context: &crate::renderer::gpu::GpuContext) -> Result<Arc<Texture>, ImageError> {
         {
             let cache = self.texture_cache.read().await;
             if let Some(texture) = cache.get(url) {
@@ -30,7 +30,7 @@ impl ImageManager {
             }
         }
 
-        let texture = self.loader.load_image(url).await?;
+        let texture = self.loader.load_image(url, gpu_context).await?;
         let texture_arc = Arc::new(texture);
 
         {
@@ -50,9 +50,9 @@ impl ImageManager {
         }
     }
 
-    pub async fn preload_images(&self, urls: &[String]) -> Result<(), ImageError> {
+    pub async fn preload_images(&self, urls: &[String], gpu_context: &crate::renderer::gpu::GpuContext) -> Result<(), ImageError> {
         for url in urls {
-            self.load_texture(url).await?;
+            self.load_texture(url, gpu_context).await?;
         }
         Ok(())
     }

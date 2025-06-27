@@ -1,5 +1,5 @@
 use crate::renderer::gpu::Texture;
-use rusttype::{Glyph, Scale};
+use rusttype::{Glyph, Scale, point};
 use std::collections::HashMap;
 
 pub struct FontAtlas {
@@ -39,12 +39,19 @@ impl FontAtlas {
         })
     }
 
-    pub fn get_or_cache_glyph(&mut self, character: char, glyph: &Glyph<'_>) -> Result<GlyphCoords, AtlasError> {
+    pub fn get_or_cache_glyph(
+        &mut self, 
+        character: char, 
+        glyph: &Glyph<'_>, 
+        scale: Scale
+    ) -> Result<GlyphCoords, AtlasError> {
         if let Some(coords) = self.glyph_cache.get(&character) {
             return Ok(coords.clone());
         }
 
-        let positioned_glyph = glyph.positioned(rusttype::point(0.0, 0.0));
+        // Scale the glyph first, then position it
+        let scaled_glyph = glyph.clone().scaled(scale);
+        let positioned_glyph = scaled_glyph.positioned(point(0.0, 0.0));
         
         if let Some(bounding_box) = positioned_glyph.pixel_bounding_box() {
             let glyph_width = (bounding_box.max.x - bounding_box.min.x) as u32;
@@ -64,7 +71,7 @@ impl FontAtlas {
             }
 
             let atlas_pos = self.allocate_space(glyph_width, glyph_height)?;
-            self.rasterize_glyph(&positioned_glyph, atlas_pos.0, atlas_pos.1, glyph_width, glyph_height)?;
+            self.rasterize_glyph(&positioned_glyph, atlas_pos.0, atlas_pos.1)?;
 
             let coords = GlyphCoords {
                 u_min: atlas_pos.0 as f32 / self.width as f32,
@@ -105,8 +112,6 @@ impl FontAtlas {
         glyph: &rusttype::PositionedGlyph,
         atlas_x: u32,
         atlas_y: u32,
-        glyph_width: u32,
-        glyph_height: u32,
     ) -> Result<(), AtlasError> {
         glyph.draw(|x, y, v| {
             let atlas_pixel_x = atlas_x + x;
@@ -131,7 +136,7 @@ impl FontAtlas {
         self.texture.as_ref().expect("Texture not created")
     }
 
-    pub fn update_texture(&mut self, gpu_context: &crate::renderer::gpu::GpuContext) -> Result<(), AtlasError> {
+    pub fn update_texture(&mut self, _gpu_context: &crate::renderer::gpu::GpuContext) -> Result<(), AtlasError> {
         // This would update the GPU texture with the current atlas data
         // Implementation would depend on the specific GPU context setup
         Ok(())

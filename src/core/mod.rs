@@ -5,7 +5,7 @@ pub mod layout;
 pub mod network;
 
 use crate::js_engine::{JSRuntime, JSError};
-use crate::renderer::{VulkanRenderer, RenderError};
+use crate::renderer::{VulkanRenderer, RenderError, LayoutTree};
 use css::computed::StyleEngine;
 use dom::Document;
 use events::EventSystem;
@@ -16,6 +16,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::BrowserConfig;
+
+// Converts a core::layout::LayoutBox to a renderer::LayoutTree
+fn from_layout_box(layout_box: &layout::LayoutBox) -> LayoutTree {
+    // TODO: Implement actual conversion logic
+    LayoutTree::from_layout_box(layout_box)
+}
 
 pub struct CoreEngine {
     pub dom: Arc<RwLock<Document>>,
@@ -78,7 +84,9 @@ impl CoreEngine {
         let doc_guard = self.dom.read().await;
         let root_node_id = doc_guard.get_root_node().ok_or_else(|| CoreError::ParseError("No root node found".to_string()))?;
         let layout_root = self.layout_engine.get_layout_box(root_node_id);
-        self.renderer.render(&*doc_guard, &layout_root).await?;
+        let layout_box = layout_root.as_ref().ok_or_else(|| CoreError::ParseError("No layout tree found".to_string()))?;
+        let layout_tree = from_layout_box(layout_box); // Convert to renderer::LayoutTree
+        self.renderer.render(&*doc_guard, &layout_tree).await?;
         Ok(())
     }
 }

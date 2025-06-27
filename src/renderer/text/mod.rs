@@ -3,9 +3,8 @@ pub mod atlas;
 pub use atlas::*;
 
 use crate::renderer::gpu::{Buffer, GpuContext, Texture};
-use crate::renderer::pipeline::Pipeline;
 use ash::vk;
-use rusttype::{Font, Scale, point};
+use rusttype::{Font, Scale};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -17,7 +16,7 @@ pub struct TextRenderer {
     default_font_size: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct TextVertex {
     pub position: [f32; 2],
     pub tex_coord: [f32; 2],
@@ -36,16 +35,28 @@ pub struct GlyphInfo {
     pub bearing_y: f32,
 }
 
+// Simple Rect struct if not available from core::layout
+#[derive(Debug, Clone)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 impl TextRenderer {
     pub async fn new(gpu_context: Arc<GpuContext>) -> Result<Self, TextError> {
         let font_atlas = FontAtlas::new(512, 512)?;
         let mut fonts = HashMap::new();
         
-        let default_font_data = include_bytes!("../../../resources/fonts/default.ttf");
-        let default_font = Font::try_from_bytes(default_font_data)
-            .ok_or_else(|| TextError::FontLoadError("Failed to load default font".to_string()))?;
-        
-        fonts.insert("default".to_string(), default_font);
+        // Try to load system default font, fallback to a minimal font if needed
+        if let Some(default_font) = Self::load_system_font() {
+            fonts.insert("default".to_string(), default_font);
+        } else {
+            // Fallback: create a very simple font or use embedded minimal font
+            // For now, we'll just leave it empty and handle in render_text
+            println!("Warning: No system font available");
+        }
 
         Ok(Self {
             gpu_context,
@@ -56,8 +67,40 @@ impl TextRenderer {
         })
     }
 
-    pub async fn load_font(&mut self, name: &str, font_data: &[u8]) -> Result<(), TextError> {
-        let font = Font::try_from_bytes(font_data)
+    fn load_system_font() -> Option<Font<'static>> {
+        // Try to load system fonts in order of preference
+        let font_paths = if cfg!(target_os = "windows") {
+            vec![
+                "C:/Windows/Fonts/arial.ttf",
+                "C:/Windows/Fonts/calibri.ttf",
+                "C:/Windows/Fonts/segoeui.ttf",
+            ]
+        } else if cfg!(target_os = "macos") {
+            vec![
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/System/Library/Fonts/Arial.ttf",
+                "/Library/Fonts/Arial.ttf",
+            ]
+        } else {
+            vec![
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/TTF/arial.ttf",
+            ]
+        };
+
+        for path in font_paths {
+            if let Ok(font_data) = std::fs::read(path) {
+                if let Some(font) = Font::try_from_vec(font_data) {
+                    return Some(font);
+                }
+            }
+        }
+        None
+    }
+
+    pub async fn load_font(&mut self, name: &str, font_data: Vec<u8>) -> Result<(), TextError> {
+        let font = Font::try_from_vec(font_data)
             .ok_or_else(|| TextError::FontLoadError(format!("Failed to load font: {}", name)))?;
         
         self.fonts.insert(name.to_string(), font);
@@ -68,19 +111,22 @@ impl TextRenderer {
         &mut self,
         command_buffer: &vk::CommandBuffer,
         text: &str,
-        bounds: &crate::core::layout::Rect,
+        bounds: &Rect,
         color: &Option<String>,
         font_family: &Option<String>,
         font_size: f32,
     ) -> Result<(), TextError> {
         let font_name = font_family.as_deref().unwrap_or("default");
-        let font = self.fonts.get(font_name)
-            .ok_or_else(|| TextError::FontNotFound(font_name.to_string()))?;
+        let font = {
+            let font_ref = self.fonts.get(font_name)
+                .ok_or_else(|| TextError::FontNotFound(font_name.to_string()))?;
+            font_ref.clone()
+        };
 
         let rgba_color = self.parse_color(color.as_ref().unwrap_or(&"#000000".to_string()));
         let scale = Scale::uniform(font_size);
 
-        let glyphs = self.layout_text(text, font, scale, bounds)?;
+        let glyphs = self.layout_text(text, &font, scale, bounds)?;
         let vertices = self.create_text_vertices(&glyphs, rgba_color)?;
 
         if vertices.is_empty() {
@@ -98,7 +144,7 @@ impl TextRenderer {
         text: &str,
         font: &Font,
         scale: Scale,
-        bounds: &crate::core::layout::Rect,
+        bounds: &Rect,
     ) -> Result<Vec<GlyphInfo>, TextError> {
         let mut glyphs = Vec::new();
         let mut x = bounds.x;
@@ -118,15 +164,39 @@ impl TextRenderer {
                 continue;
             }
 
-            let glyph = font.glyph(character);
-            let atlas_coords = self.font_atlas.get_or_cache_glyph(character, &glyph)?;
+            // Get the base glyph
+            let base_glyph = font.glyph(character);
+            
+            // Clone glyph before scaling to avoid move issues
+            let glyph_for_atlas = base_glyph.clone();
+            let glyph_for_scaling = base_glyph.clone();
+            
+            // Scale and position for metrics and layout
+            let scaled_glyph = glyph_for_scaling.scaled(scale);
+            let h_metrics = scaled_glyph.h_metrics();
+            let positioned_glyph = scaled_glyph.positioned(rusttype::point(x, y));
+            let bounding_box = positioned_glyph.pixel_bounding_box();
+            
+            // Now cache in atlas (this requires mutable borrow of self)
+            let _atlas_coords = self.font_atlas.get_or_cache_glyph(character, &glyph_for_atlas, scale)?;
+            
+            let (glyph_x, glyph_y, glyph_width, glyph_height) = if let Some(bb) = bounding_box {
+                (
+                    bb.min.x as f32,
+                    bb.min.y as f32,
+                    (bb.max.x - bb.min.x) as f32,
+                    (bb.max.y - bb.min.y) as f32,
+                )
+            } else {
+                (x, y, 0.0, 0.0)
+            };
             
             glyphs.push(GlyphInfo {
                 character,
-                x: bounding_box.min.x as f32,
-                y: bounding_box.min.y as f32,
-                width: (bounding_box.max.x - bounding_box.min.x) as f32,
-                height: (bounding_box.max.y - bounding_box.min.y) as f32,
+                x: glyph_x,
+                y: glyph_y,
+                width: glyph_width,
+                height: glyph_height,
                 advance: h_metrics.advance_width,
                 bearing_x: h_metrics.left_side_bearing,
                 bearing_y: v_metrics.ascent,
@@ -134,6 +204,7 @@ impl TextRenderer {
 
             x += h_metrics.advance_width;
 
+            // Simple line wrapping
             if x > bounds.x + bounds.width {
                 x = bounds.x;
                 y += line_height;
@@ -147,6 +218,10 @@ impl TextRenderer {
         let mut vertices = Vec::new();
 
         for glyph in glyphs {
+            if glyph.width == 0.0 || glyph.height == 0.0 {
+                continue; // Skip whitespace characters
+            }
+
             let atlas_coords = self.font_atlas.get_glyph_coords(glyph.character)
                 .ok_or_else(|| TextError::GlyphNotFound(glyph.character))?;
 

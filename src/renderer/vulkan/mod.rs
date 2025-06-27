@@ -3,7 +3,6 @@ use parking_lot::{Mutex, RwLock};
 use ash::{Device, Instance, Entry};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
-use raw_window_handle::{HasRawWindowHandle, HasRawDisplayHandle};
 use thiserror::Error;
 use dashmap::DashMap;
 use smallvec::SmallVec;
@@ -12,9 +11,9 @@ pub mod device;
 pub mod command;
 pub mod shaders;
 
-use device::VulkanDevice;
-use command::CommandManager;
-use shaders::ShaderManager;
+use device::{VulkanDevice, DeviceError};
+use command::{CommandManager, CommandError};
+use shaders::{ShaderManager, ShaderError};
 
 use crate::core::{dom::Document, layout::LayoutEngine};
 use crate::BrowserConfig;
@@ -35,6 +34,12 @@ pub enum VulkanError {
     CommandBuffer(String),
     #[error("Shader compilation failed: {0}")]
     ShaderCompilation(String),
+    #[error("Device error: {0}")]
+    Device(#[from] DeviceError),
+    #[error("Command error: {0}")]
+    Command(#[from] CommandError),
+    #[error("Shader error: {0}")]
+    Shader(#[from] ShaderError),
 }
 
 pub type Result<T> = std::result::Result<T, VulkanError>;
@@ -73,6 +78,7 @@ pub struct RenderCommand {
     pub instance_count: u32,
 }
 
+#[derive(Debug, Clone)]
 pub struct SwapchainData {
     pub swapchain: vk::SwapchainKHR,
     pub images: Vec<vk::Image>,
@@ -81,6 +87,71 @@ pub struct SwapchainData {
     pub format: vk::Format,
     pub extent: vk::Extent2D,
     pub current_index: u32,
+}
+
+struct MemoryTracker {
+    allocated_bytes: std::sync::atomic::AtomicU64,
+    peak_bytes: std::sync::atomic::AtomicU64,
+}
+
+impl MemoryTracker {
+    fn new() -> Self {
+        Self {
+            allocated_bytes: std::sync::atomic::AtomicU64::new(0),
+            peak_bytes: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn allocate(&self, bytes: u64) {
+        let current = self.allocated_bytes.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed) + bytes;
+        let peak = self.peak_bytes.load(std::sync::atomic::Ordering::Relaxed);
+        if current > peak {
+            self.peak_bytes.store(current, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn deallocate(&self, bytes: u64) {
+        self.allocated_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn current_usage(&self) -> u64 {
+        self.allocated_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn peak_usage(&self) -> u64 {
+        self.peak_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+struct ResourceManager {
+    pipelines: DashMap<u64, vk::Pipeline>,
+    descriptor_set_layouts: DashMap<String, vk::DescriptorSetLayout>,
+    uniform_buffers: DashMap<String, (vk::Buffer, gpu_allocator::vulkan::Allocation)>,
+    vertex_buffers: DashMap<u64, (vk::Buffer, gpu_allocator::vulkan::Allocation)>,
+    index_buffers: DashMap<u64, (vk::Buffer, gpu_allocator::vulkan::Allocation)>,
+    textures: DashMap<u64, (vk::Image, vk::ImageView, gpu_allocator::vulkan::Allocation)>,
+}
+
+impl ResourceManager {
+    fn new() -> Self {
+        Self {
+            pipelines: DashMap::with_capacity(64),
+            descriptor_set_layouts: DashMap::with_capacity(32),
+            uniform_buffers: DashMap::with_capacity(128),
+            vertex_buffers: DashMap::with_capacity(256),
+            index_buffers: DashMap::with_capacity(256),
+            textures: DashMap::with_capacity(512),
+        }
+    }
+
+    unsafe fn cleanup(&self, device: &Device) {
+        for entry in self.pipelines.iter() {
+            device.destroy_pipeline(*entry.value(), None);
+        }
+        for entry in self.descriptor_set_layouts.iter() {
+            device.destroy_descriptor_set_layout(*entry.value(), None);
+        }
+    }
 }
 
 pub struct VulkanRenderer {
@@ -96,14 +167,10 @@ pub struct VulkanRenderer {
     shader_manager: Arc<ShaderManager>,
     render_pass: vk::RenderPass,
     pipeline_cache: vk::PipelineCache,
-    pipelines: Arc<DashMap<u64, vk::Pipeline>>,
     descriptor_pool: vk::DescriptorPool,
-    descriptor_set_layouts: Arc<DashMap<String, vk::DescriptorSetLayout>>,
-    uniform_buffers: Arc<DashMap<String, (vk::Buffer, gpu_allocator::vulkan::Allocation)>>,
-    vertex_buffers: Arc<DashMap<u64, (vk::Buffer, gpu_allocator::vulkan::Allocation)>>,
-    index_buffers: Arc<DashMap<u64, (vk::Buffer, gpu_allocator::vulkan::Allocation)>>,
-    textures: Arc<DashMap<u64, (vk::Image, vk::ImageView, gpu_allocator::vulkan::Allocation)>>,
-    frame_index: u32,
+    resources: ResourceManager,
+    memory_tracker: MemoryTracker,
+    frame_index: std::sync::atomic::AtomicU32,
     stats: Arc<RwLock<RenderStats>>,
     command_batches: Arc<RwLock<Vec<RenderCommand>>>,
 }
@@ -119,22 +186,8 @@ impl VulkanRenderer {
         
         let device = Arc::new(VulkanDevice::new(&entry, &instance, surface, &surface_loader).await?);
         
-        let allocator_desc = AllocatorCreateDesc {
-            instance: instance.clone(),
-            device: device.logical_device().clone(),
-            physical_device: device.physical_device(),
-            debug_settings: gpu_allocator::AllocatorDebugSettings::default(),
-            buffer_device_address: false,
-            allocation_sizes: gpu_allocator::AllocationSizes::default(),
-        };
-        
-        let allocator = Arc::new(Mutex::new(
-            Allocator::new(&allocator_desc)
-                .map_err(|e| VulkanError::MemoryAllocation(e.to_string()))?
-        ));
-
+        let allocator = Self::create_allocator(&instance, &device)?;
         let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, device.logical_device());
-        
         let command_manager = Arc::new(CommandManager::new(device.clone()).await?);
         let shader_manager = Arc::new(ShaderManager::new(device.clone()).await?);
         
@@ -144,11 +197,14 @@ impl VulkanRenderer {
         
         let swapchain_data = Arc::new(RwLock::new(SwapchainData {
             swapchain: vk::SwapchainKHR::null(),
-            images: Vec::new(),
-            image_views: Vec::new(),
-            framebuffers: Vec::new(),
+            images: Vec::with_capacity(3),
+            image_views: Vec::with_capacity(3),
+            framebuffers: Vec::with_capacity(3),
             format: vk::Format::B8G8R8A8_SRGB,
-            extent: vk::Extent2D { width: config.viewport_width, height: config.viewport_height },
+            extent: vk::Extent2D { 
+                width: config.viewport_width.max(1), 
+                height: config.viewport_height.max(1) 
+            },
             current_index: 0,
         }));
 
@@ -165,17 +221,36 @@ impl VulkanRenderer {
             shader_manager,
             render_pass,
             pipeline_cache,
-            pipelines: Arc::new(DashMap::new()),
             descriptor_pool,
-            descriptor_set_layouts: Arc::new(DashMap::new()),
-            uniform_buffers: Arc::new(DashMap::new()),
-            vertex_buffers: Arc::new(DashMap::new()),
-            index_buffers: Arc::new(DashMap::new()),
-            textures: Arc::new(DashMap::new()),
-            frame_index: 0,
+            resources: ResourceManager::new(),
+            memory_tracker: MemoryTracker::new(),
+            frame_index: std::sync::atomic::AtomicU32::new(0),
             stats: Arc::new(RwLock::new(RenderStats::default())),
             command_batches: Arc::new(RwLock::new(Vec::with_capacity(1024))),
         })
+    }
+
+    fn create_allocator(instance: &Instance, device: &Arc<VulkanDevice>) -> Result<Arc<Mutex<Allocator>>> {
+        let allocator_desc = AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.logical_device().clone(),
+            physical_device: device.physical_device(),
+            debug_settings: gpu_allocator::AllocatorDebugSettings {
+                log_memory_information: cfg!(debug_assertions),
+                log_leaks_on_shutdown: cfg!(debug_assertions),
+                store_stack_traces: false,
+                log_allocations: false,
+                log_frees: false,
+                log_stack_traces: false,
+            },
+            buffer_device_address: device.capabilities().supports_timeline_semaphores,
+            allocation_sizes: gpu_allocator::AllocationSizes::default(),
+        };
+        
+        let allocator = Allocator::new(&allocator_desc)
+            .map_err(|e| VulkanError::MemoryAllocation(e.to_string()))?;
+            
+        Ok(Arc::new(Mutex::new(allocator)))
     }
 
     fn create_instance(entry: &Entry) -> Result<Instance> {
@@ -186,14 +261,18 @@ impl VulkanRenderer {
             .engine_version(vk::make_api_version(0, 1, 0, 0))
             .api_version(vk::API_VERSION_1_3);
 
-        let extension_names = vec![
+        let mut extension_names = vec![
             ash::extensions::khr::Surface::name().as_ptr(),
-            ash::extensions::ext::DebugUtils::name().as_ptr(),
         ];
 
-        let layer_names = vec![
-            unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0").as_ptr() }
-        ];
+        let mut layer_names = Vec::new();
+
+        if cfg!(debug_assertions) {
+            extension_names.push(ash::extensions::ext::DebugUtils::name().as_ptr());
+            layer_names.push(unsafe { 
+                std::ffi::CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0").as_ptr() 
+            });
+        }
 
         let create_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
@@ -207,52 +286,53 @@ impl VulkanRenderer {
     }
 
     fn create_render_pass(device: &Device) -> Result<vk::RenderPass> {
-        let color_attachment = vk::AttachmentDescription::builder()
-            .format(vk::Format::B8G8R8A8_SRGB)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+        let attachments = [
+            vk::AttachmentDescription::builder()
+                .format(vk::Format::B8G8R8A8_SRGB)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                .build(),
+            vk::AttachmentDescription::builder()
+                .format(vk::Format::D32_SFLOAT)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .build(),
+        ];
 
-        let depth_attachment = vk::AttachmentDescription::builder()
-            .format(vk::Format::D32_SFLOAT)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-
-        let color_attachment_ref = vk::AttachmentReference::builder()
+        let color_attachment_refs = [vk::AttachmentReference::builder()
             .attachment(0)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .build()];
 
         let depth_attachment_ref = vk::AttachmentReference::builder()
             .attachment(1)
-            .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-
-        let color_attachments = [*color_attachment_ref];
+            .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            .build();
         
-        let subpass = vk::SubpassDescription::builder()
+        let subpasses = [vk::SubpassDescription::builder()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(&color_attachments)
-            .depth_stencil_attachment(&depth_attachment_ref);
+            .color_attachments(&color_attachment_refs)
+            .depth_stencil_attachment(&depth_attachment_ref)
+            .build()];
 
-        let dependency = vk::SubpassDependency::builder()
+        let dependencies = [vk::SubpassDependency::builder()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
             .src_access_mask(vk::AccessFlags::empty())
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
-
-        let attachments = [*color_attachment, *depth_attachment];
-        let subpasses = [*subpass];
-        let dependencies = [*dependency];
+            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
+            .build()];
 
         let render_pass_info = vk::RenderPassCreateInfo::builder()
             .attachments(&attachments)
@@ -275,7 +355,7 @@ impl VulkanRenderer {
     }
 
     fn create_descriptor_pool(device: &Device) -> Result<vk::DescriptorPool> {
-        let pool_sizes = vec![
+        let pool_sizes = [
             vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1000)
@@ -305,45 +385,45 @@ impl VulkanRenderer {
         let frame_start = std::time::Instant::now();
         
         let swapchain_data = self.swapchain_data.read();
-        let image_index = self.acquire_next_image(&swapchain_data)?;
+        if swapchain_data.swapchain == vk::SwapchainKHR::null() {
+            return Ok(());
+        }
         
+        let image_index = self.acquire_next_image(&swapchain_data)?;
         let command_buffer = self.command_manager.begin_frame().await?;
         
         self.begin_render_pass(command_buffer, &swapchain_data, image_index)?;
         
-        let mut batch = self.command_batches.write();
-        batch.clear();
-        
-        self.build_render_commands(document, layout_engine, &mut batch).await?;
-        
         let mut stats = RenderStats::default();
-        stats.draw_calls = batch.len() as u32;
-        
-        for command in batch.iter() {
-            self.execute_render_command(command_buffer, command, &mut stats)?;
+        {
+            let mut batch = self.command_batches.write();
+            batch.clear();
+            
+            self.build_render_commands(document, layout_engine, &mut batch).await?;
+            stats.draw_calls = batch.len() as u32;
+            
+            for command in batch.iter() {
+                self.execute_render_command(command_buffer, command, &mut stats)?;
+            }
         }
         
-        drop(batch);
-        
         self.end_render_pass(command_buffer)?;
-        
         self.command_manager.end_frame(command_buffer).await?;
-        
         self.present_frame(&swapchain_data, image_index)?;
         
         stats.frame_time_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
+        stats.memory_used_mb = (self.get_memory_usage().await / (1024 * 1024)) as u32;
         *self.stats.write() = stats;
         
-        self.frame_index = self.frame_index.wrapping_add(1);
-        
+        self.frame_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     async fn build_render_commands(
         &self, 
-        document: &Document, 
-        layout_engine: &LayoutEngine, 
-        batch: &mut Vec<RenderCommand>
+        _document: &Document, 
+        _layout_engine: &LayoutEngine, 
+        _batch: &mut Vec<RenderCommand>
     ) -> Result<()> {
         Ok(())
     }
@@ -367,7 +447,7 @@ impl VulkanRenderer {
         swapchain_data: &SwapchainData, 
         image_index: u32
     ) -> Result<()> {
-        let clear_values = vec![
+        let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
                     float32: [0.0, 0.0, 0.0, 1.0],
@@ -407,12 +487,12 @@ impl VulkanRenderer {
         command: &RenderCommand, 
         stats: &mut RenderStats
     ) -> Result<()> {
-        if let Some(pipeline) = self.pipelines.get(&command.pipeline_id) {
+        if let Some(pipeline) = self.resources.pipelines.get(&command.pipeline_id) {
             unsafe {
                 self.device.logical_device().cmd_bind_pipeline(
                     command_buffer,
                     vk::PipelineBindPoint::GRAPHICS,
-                    *pipeline,
+                    *pipeline.value(),
                 );
 
                 if !command.descriptor_sets.is_empty() {
@@ -452,6 +532,7 @@ impl VulkanRenderer {
 
             stats.triangles += command.index_count / 3;
             stats.vertices += command.index_count;
+            stats.pipeline_switches += 1;
         }
 
         Ok(())
@@ -482,6 +563,11 @@ impl VulkanRenderer {
 
     pub async fn resize_surface(&self, width: u32, height: u32) -> Result<()> {
         self.device.wait_idle().await?;
+        
+        let mut swapchain_data = self.swapchain_data.write();
+        swapchain_data.extent.width = width.max(1);
+        swapchain_data.extent.height = height.max(1);
+        
         Ok(())
     }
 
@@ -495,29 +581,42 @@ impl VulkanRenderer {
             "vertices": stats.vertices,
             "memory_used_mb": stats.memory_used_mb,
             "pipeline_switches": stats.pipeline_switches,
+            "frame_index": self.frame_index.load(std::sync::atomic::Ordering::Relaxed),
         })
     }
 
     pub async fn get_memory_usage(&self) -> u64 {
-        let allocator = self.allocator.lock();
-        allocator.allocation_report().total_allocated_bytes
+        self.memory_tracker.current_usage()
+    }
+
+    pub async fn get_peak_memory_usage(&self) -> u64 {
+        self.memory_tracker.peak_usage()
     }
 
     pub async fn shutdown(&self) -> Result<()> {
         self.device.wait_idle().await?;
 
         unsafe {
+            self.resources.cleanup(self.device.logical_device());
             self.device.logical_device().destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.logical_device().destroy_pipeline_cache(self.pipeline_cache, None);
             self.device.logical_device().destroy_render_pass(self.render_pass, None);
             
-            for (_, pipeline) in self.pipelines.iter() {
-                self.device.logical_device().destroy_pipeline(*pipeline, None);
+            if self.surface != vk::SurfaceKHR::null() {
+                self.surface_loader.destroy_surface(self.surface, None);
             }
             
             self.instance.destroy_instance(None);
         }
 
         Ok(())
+    }
+
+    pub fn get_pipeline(&self, id: u64) -> Option<vk::Pipeline> {
+        self.resources.pipelines.get(&id).map(|entry| *entry.value())
+    }
+
+    pub fn register_pipeline(&self, id: u64, pipeline: vk::Pipeline) {
+        self.resources.pipelines.insert(id, pipeline);
     }
 }

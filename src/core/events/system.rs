@@ -137,7 +137,7 @@ impl EventSystem {
         }
     }
 
-    fn get_event_target(&self, event: &Event) -> Option<NodeId> {
+    fn get_event_target(&self, _event: &Event) -> Option<NodeId> {
         None
     }
 }

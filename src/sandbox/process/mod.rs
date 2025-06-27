@@ -223,11 +223,11 @@ impl SandboxedProcess {
 
     pub async fn suspend(&mut self) -> Result<(), ProcessError> {
         if let Some(ref child) = self.handle {
-            let pid = child.id().ok_or(ProcessError::InvalidPid)?;
+            let _pid = child.id().ok_or(ProcessError::InvalidPid)?;
             
             #[cfg(unix)]
             unsafe {
-                libc::kill(pid as i32, libc::SIGSTOP);
+                libc::kill(_pid as i32, libc::SIGSTOP);
             }
             
             let mut status = self.status.write().await;
@@ -238,11 +238,11 @@ impl SandboxedProcess {
 
     pub async fn resume(&mut self) -> Result<(), ProcessError> {
         if let Some(ref child) = self.handle {
-            let pid = child.id().ok_or(ProcessError::InvalidPid)?;
+            let _pid = child.id().ok_or(ProcessError::InvalidPid)?;
             
             #[cfg(unix)]
             unsafe {
-                libc::kill(pid as i32, libc::SIGCONT);
+                libc::kill(_pid as i32, libc::SIGCONT);
             }
             
             let mut status = self.status.write().await;
@@ -286,11 +286,11 @@ impl SandboxedProcess {
         }
     }
 
-    async fn get_process_info(pid: u32) -> Result<ProcessInfo, ProcessError> {
+    async fn get_process_info(_pid: u32) -> Result<ProcessInfo, ProcessError> {
         #[cfg(target_os = "linux")]
         {
-            let stat_path = format!("/proc/{}/stat", pid);
-            let status_path = format!("/proc/{}/status", pid);
+            let stat_path = format!("/proc/{}/stat", _pid);
+            let status_path = format!("/proc/{}/status", _pid);
             
             let stat_content = tokio::fs::read_to_string(stat_path).await
                 .map_err(|_| ProcessError::MonitoringFailed)?;
@@ -314,7 +314,7 @@ impl SandboxedProcess {
         process_id: u32,
         mut receiver: mpsc::UnboundedReceiver<ProcessCommand>,
         stats: Arc<RwLock<ProcessStats>>,
-        status: Arc<RwLock<ProcessStatus>>,
+        _status: Arc<RwLock<ProcessStatus>>,
     ) {
         tokio::spawn(async move {
             while let Some(command) = receiver.recv().await {
@@ -323,7 +323,7 @@ impl SandboxedProcess {
                         let stats_guard = stats.read().await;
                         log::debug!("Process {} stats: {:?}", process_id, *stats_guard);
                     }
-                    ProcessCommand::UpdateLimits(new_limits) => {
+                    ProcessCommand::UpdateLimits(_new_limits) => {
                         log::info!("Updating resource limits for process {}", process_id);
                     }
                     _ => {
@@ -382,14 +382,14 @@ impl IsolationManager {
         })
     }
 
-    async fn apply_restrictions(&self, command: &mut Command) -> Result<(), ProcessError> {
+    async fn apply_restrictions(&self, _command: &mut Command) -> Result<(), ProcessError> {
         match self.isolation_level {
             IsolationLevel::Maximum | IsolationLevel::Strict => {
                 #[cfg(target_os = "linux")]
                 {
-                    command.env("SECCOMP", "1");
-                    command.env("UNSHARE_NET", "1");
-                    command.env("UNSHARE_PID", "1");
+                    _command.env("SECCOMP", "1");
+                    _command.env("UNSHARE_NET", "1");
+                    _command.env("UNSHARE_PID", "1");
                 }
             }
             _ => {}

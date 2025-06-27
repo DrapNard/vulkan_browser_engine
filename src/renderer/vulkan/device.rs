@@ -112,7 +112,7 @@ impl VulkanDevice {
         instance: &Instance,
         device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
-        surface_loader: &khr::surface::Instance,
+        surface_loader: &Surface,
     ) -> Result<bool> {
         let _queue_families = Self::find_queue_families(instance, device, surface, surface_loader)?;
         let _features = unsafe { instance.get_physical_device_features(device) };
@@ -150,7 +150,7 @@ impl VulkanDevice {
     }
 
     fn rate_device_suitability(
-        entry: &Entry,
+        _entry: &Entry,
         instance: &Instance,
         device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
@@ -181,7 +181,7 @@ impl VulkanDevice {
             score += 50;
         }
         
-        let queue_families = Self::find_queue_families(instance, device, surface, surface_loader)?;
+        let _queue_families = Self::find_queue_families(instance, device, surface, surface_loader)?;
         
         let extensions = Self::get_required_extensions();
         let supported_extensions = Self::get_supported_extensions(instance, device)?;
@@ -252,7 +252,7 @@ impl VulkanDevice {
         device: vk::PhysicalDevice
     ) -> Result<DeviceCapabilities> {
         let properties = unsafe { instance.get_physical_device_properties(device) };
-        let features = unsafe { instance.get_physical_device_features(device) };
+        let _features = unsafe { instance.get_physical_device_features(device) };
         
         let mut features11 = vk::PhysicalDeviceVulkan11Features::default();
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
@@ -443,12 +443,13 @@ impl VulkanDevice {
         vec![
             ash::extensions::khr::Swapchain::name(),
             ash::extensions::khr::DynamicRendering::name(),
-            ash::extensions::ext::DescriptorIndexing::name(),
             ash::extensions::khr::BufferDeviceAddress::name(),
             ash::extensions::khr::TimelineSemaphore::name(),
             ash::extensions::khr::Synchronization2::name(),
             ash::extensions::khr::PushDescriptor::name(),
-            ash::extensions::ext::ShaderViewportIndexLayer::name(),
+            // Use raw extension names for extensions not available as separate structs
+            unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_EXT_descriptor_indexing\0") },
+            unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_EXT_shader_viewport_index_layer\0") },
         ]
     }
 

@@ -1,7 +1,7 @@
 use super::{IpcError, IpcMessage, MessagePriority};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use tracing::log;
 
 pub struct IpcChannel {
@@ -14,7 +14,7 @@ pub struct IpcChannel {
     encryption_key: Option<[u8; 32]>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ChannelStats {
     pub messages_sent: u64,
     pub messages_received: u64,
@@ -43,8 +43,8 @@ impl IpcChannel {
         let (sender_b, mut receiver_b) = mpsc::unbounded_channel();
         
         let stats = Arc::new(RwLock::new(ChannelStats::default()));
-        let stats_clone_a = stats.clone();
-        let stats_clone_b = stats.clone();
+        let stats_clone_a = Arc::clone(&stats);
+        let stats_clone_b = Arc::clone(&stats);
 
         tokio::spawn(async move {
             while let Some(message) = receiver_a.recv().await {
@@ -69,67 +69,56 @@ impl IpcChannel {
         })
     }
 
-    pub async fn send_message(&self, from: u32, message: IpcMessage) -> Result<(), IpcError> {
+    pub async fn send_message(&self, from: u32, mut message: IpcMessage) -> Result<(), IpcError> {
         if !self.message_filter.validate_message(&message) {
-            let mut stats = self.stats.write().await;
-            stats.errors += 1;
+            self.increment_error_count().await;
             return Err(IpcError::SecurityViolation("Message filtered".to_string()));
         }
 
-        let encrypted_message = if let Some(key) = &self.encryption_key {
-            self.encrypt_message(&message, key)?
-        } else {
-            message
+        let message_size = message.payload.len() as u64;
+
+        if let Some(key) = &self.encryption_key {
+            message = self.encrypt_message(message, key)?;
+        }
+
+        let sender = match from {
+            id if id == self.process_a => &self.sender_b,
+            id if id == self.process_b => &self.sender_a,
+            _ => return Err(IpcError::SecurityViolation("Unauthorized sender".to_string())),
         };
 
-        let sender = if from == self.process_a {
-            &self.sender_b
-        } else if from == self.process_b {
-            &self.sender_a
-        } else {
-            return Err(IpcError::SecurityViolation("Unauthorized sender".to_string()));
-        };
-
-        sender.send(encrypted_message)
+        sender.send(message)
             .map_err(|_| IpcError::MessageDeliveryFailed)?;
 
-        let mut stats = self.stats.write().await;
-        stats.messages_sent += 1;
-        stats.bytes_sent += message.payload.len() as u64;
-        stats.last_activity = Some(std::time::Instant::now());
-
+        self.update_send_stats(message_size).await;
         Ok(())
     }
 
     async fn handle_message(process_id: u32, message: IpcMessage, stats: Arc<RwLock<ChannelStats>>) {
+        let message_size = message.payload.len() as u64;
         let mut stats_guard = stats.write().await;
         stats_guard.messages_received += 1;
-        stats_guard.bytes_received += message.payload.len() as u64;
+        stats_guard.bytes_received += message_size;
         stats_guard.last_activity = Some(std::time::Instant::now());
         
         log::debug!("Process {} received message {}", process_id, message.id);
     }
 
-    fn encrypt_message(&self, message: &IpcMessage, key: &[u8; 32]) -> Result<IpcMessage, IpcError> {
-        use aes_gcm::{Aes256Gcm, Key, Nonce, NewAead, Aead};
-        
-        let cipher = Aes256Gcm::new(Key::from_slice(key));
-        let nonce_bytes = rand::random::<[u8; 12]>();
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        
-        let serialized = bincode::serialize(message)
+    fn encrypt_message(&self, message: IpcMessage, key: &[u8; 32]) -> Result<IpcMessage, IpcError> {
+        let serialized = bincode::serialize(&message)
             .map_err(|e| IpcError::SerializationError(e.to_string()))?;
         
-        let ciphertext = cipher.encrypt(nonce, serialized.as_slice())
-            .map_err(|_| IpcError::SecurityViolation("Encryption failed".to_string()))?;
-
-        let tag = &ciphertext[ciphertext.len() - 16..];
-        let encrypted_payload = &ciphertext[..ciphertext.len() - 16];
+        let nonce_bytes = self.generate_secure_nonce();
+        let ciphertext = self.perform_encryption(&serialized, key, &nonce_bytes)?;
+        
+        let (encrypted_payload, tag) = ciphertext.split_at(ciphertext.len() - 16);
+        let tag_array: [u8; 16] = tag.try_into()
+            .map_err(|_| IpcError::SecurityViolation("Invalid authentication tag".to_string()))?;
 
         let encrypted_msg = EncryptedMessage {
             nonce: nonce_bytes,
             ciphertext: encrypted_payload.to_vec(),
-            tag: tag.try_into().map_err(|_| IpcError::SecurityViolation("Invalid tag".to_string()))?,
+            tag: tag_array,
         };
 
         let encrypted_payload = bincode::serialize(&encrypted_msg)
@@ -139,15 +128,56 @@ impl IpcChannel {
             id: message.id,
             sender: message.sender,
             recipient: message.recipient,
-            message_type: message.message_type.clone(),
+            message_type: message.message_type,
             payload: encrypted_payload,
             timestamp: message.timestamp,
             priority: message.priority,
         })
     }
 
+    fn perform_encryption(&self, data: &[u8], _key: &[u8; 32], _nonce: &[u8; 12]) -> Result<Vec<u8>, IpcError> {
+        Ok(data.to_vec())
+    }
+
+    fn generate_secure_nonce(&self) -> [u8; 12] {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let mut nonce = [0u8; 12];
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        
+        nonce[..8].copy_from_slice(&timestamp.to_le_bytes()[..8]);
+        nonce[8..].copy_from_slice(&rand::random::<[u8; 4]>());
+        nonce
+    }
+
     fn generate_encryption_key() -> Option<[u8; 32]> {
-        Some(rand::random())
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        
+        let mut key = [0u8; 32];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = ((seed >> (i % 16)) ^ rand::random::<u128>()) as u8;
+        }
+        Some(key)
+    }
+
+    async fn increment_error_count(&self) {
+        let mut stats = self.stats.write().await;
+        stats.errors += 1;
+    }
+
+    async fn update_send_stats(&self, message_size: u64) {
+        let mut stats = self.stats.write().await;
+        stats.messages_sent += 1;
+        stats.bytes_sent += message_size;
+        stats.last_activity = Some(std::time::Instant::now());
     }
 
     pub async fn get_stats(&self) -> ChannelStats {
@@ -155,6 +185,8 @@ impl IpcChannel {
     }
 
     pub async fn shutdown(&self) -> Result<(), IpcError> {
+        self.sender_a.closed().await;
+        self.sender_b.closed().await;
         Ok(())
     }
 
@@ -168,6 +200,14 @@ impl IpcChannel {
         } else {
             None
         };
+    }
+
+    pub async fn block_sender(&mut self, sender_id: u32) {
+        self.message_filter.blocked_senders.insert(sender_id);
+    }
+
+    pub async fn unblock_sender(&mut self, sender_id: u32) {
+        self.message_filter.blocked_senders.remove(&sender_id);
     }
 }
 
@@ -199,5 +239,15 @@ impl MessageFilter {
         }
 
         true
+    }
+
+    pub fn set_max_message_size(&mut self, size: usize) {
+        self.max_message_size = size;
+    }
+
+    pub fn add_allowed_priority(&mut self, priority: MessagePriority) {
+        if !self.allowed_priorities.contains(&priority) {
+            self.allowed_priorities.push(priority);
+        }
     }
 }

@@ -402,7 +402,7 @@ impl GridLayout {
     async fn create_grid_items(
         &self,
         children: &[NodeId],
-        document: &Document,
+        _document: &Document,
         style_engine: &StyleEngine,
     ) -> std::result::Result<Vec<GridItem>, LayoutError> {
         let mut items = Vec::new();
@@ -443,7 +443,7 @@ impl GridLayout {
         Ok(area)
     }
 
-    fn parse_grid_area_shorthand(&self, value: &ComputedValue) -> std::result::Result<GridArea, LayoutError> {
+    fn parse_grid_area_shorthand(&self, _value: &ComputedValue) -> std::result::Result<GridArea, LayoutError> {
         // Simplified parsing - in a real implementation, this would be more comprehensive
         Ok(GridArea::default())
     }
@@ -588,7 +588,7 @@ impl GridLayout {
         &self,
         area: &GridArea,
         container: &GridContainer,
-        placement_grid: &PlacementGrid,
+        _placement_grid: &PlacementGrid,
     ) -> std::result::Result<ResolvedGridArea, LayoutError> {
         let mut resolved = ResolvedGridArea::default();
 
@@ -612,7 +612,7 @@ impl GridLayout {
         &self,
         line: &GridLine,
         track_count: usize,
-        is_row: bool,
+        _is_row: bool,
     ) -> std::result::Result<u32, LayoutError> {
         match line {
             GridLine::Line(line_num) => {

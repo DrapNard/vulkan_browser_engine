@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::collections::VecDeque;
 use ash::{Device, vk};
 use parking_lot::{Mutex, RwLock};
-use crossbeam::channel::{Sender, Receiver, unbounded};
+use crossbeam::channel::{Sender, unbounded};
 use dashmap::DashMap;
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -209,7 +209,7 @@ impl CommandManager {
             frames_in_flight.push_back(FrameData::new(device.logical_device(), i)?);
         }
 
-        let (shutdown_tx, shutdown_rx) = unbounded();
+        let (shutdown_tx, _shutdown_rx) = unbounded();
 
         let manager = Self {
             device: device.clone(),
@@ -293,15 +293,18 @@ impl CommandManager {
         let buffer = match buffer_type {
             CommandBufferType::Graphics => {
                 let mut pools = self.graphics_pools.lock();
-                pools[pool_index % pools.len()].allocate_buffer(self.device.logical_device(), level)?
+                let pool_count = pools.len();
+                pools[pool_index % pool_count].allocate_buffer(self.device.logical_device(), level)?
             },
             CommandBufferType::Compute => {
                 let mut pools = self.compute_pools.lock();
-                pools[pool_index % pools.len()].allocate_buffer(self.device.logical_device(), level)?
+                let pool_count = pools.len();
+                pools[pool_index % pool_count].allocate_buffer(self.device.logical_device(), level)?
             },
             CommandBufferType::Transfer => {
                 let mut pools = self.transfer_pools.lock();
-                pools[pool_index % pools.len()].allocate_buffer(self.device.logical_device(), level)?
+                let pool_count = pools.len();
+                pools[pool_index % pool_count].allocate_buffer(self.device.logical_device(), level)?
             },
         };
 
@@ -368,21 +371,27 @@ impl CommandManager {
             CommandBufferType::Transfer => self.device.transfer_queue(),
         };
 
-        let current_frame = *self.current_frame.read();
-        let frames = self.frames_in_flight.read();
-        let frame_data = &frames[(current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight as usize];
+        // Get the submission fence, ensuring proper lifetime management
+        let submission_fence = {
+            let current_frame = *self.current_frame.read();
+            let frame_index = ((current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight) as usize;
+            let frames = self.frames_in_flight.read();
+            frames[frame_index].submission_fence
+        };
 
+        let command_buffers = [buffer];
         let submit_info = vk::SubmitInfo::builder()
-            .command_buffers(&[buffer])
+            .command_buffers(&command_buffers)
             .wait_semaphores(wait_semaphores)
             .wait_dst_stage_mask(wait_stages)
-            .signal_semaphores(signal_semaphores);
+            .signal_semaphores(signal_semaphores)
+            .build();
 
         unsafe {
             self.device.logical_device().queue_submit(
                 queue,
-                &[*submit_info],
-                frame_data.submission_fence
+                &[submit_info],
+                submission_fence
             ).map_err(|e| CommandError::Submission(e.to_string()))?;
         }
 
@@ -392,34 +401,53 @@ impl CommandManager {
     pub async fn end_frame(&self, primary_buffer: vk::CommandBuffer) -> Result<()> {
         self.end_command_buffer(primary_buffer).await?;
 
-        let current_frame = *self.current_frame.read();
-        let mut frames = self.frames_in_flight.write();
-        let frame_data = &mut frames[(current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight as usize];
+        // Get the frame index and extract semaphore/fence values, ensuring proper lifetime management
+        let (render_finished_semaphore, submission_fence) = {
+            let current_frame = *self.current_frame.read();
+            let frame_index = ((current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight) as usize;
+            let mut frames = self.frames_in_flight.write();
+            let frame_data = &mut frames[frame_index];
 
-        if let Some(buffer_info) = self.command_buffer_registry.get(&primary_buffer) {
-            frame_data.command_buffers.push(*buffer_info.value());
-        }
+            if let Some(buffer_info) = self.command_buffer_registry.get(&primary_buffer) {
+                frame_data.command_buffers.push(*buffer_info.value());
+            }
 
+            let semaphore = frame_data.render_finished_semaphore;
+            let fence = frame_data.submission_fence;
+            
+            // Extract values before releasing the lock
+            (semaphore, fence)
+        };
+
+        let command_buffers = [primary_buffer];
+        let signal_semaphores = [render_finished_semaphore];
         let submit_info = vk::SubmitInfo::builder()
-            .command_buffers(&[primary_buffer])
-            .signal_semaphores(&[frame_data.render_finished_semaphore]);
+            .command_buffers(&command_buffers)
+            .signal_semaphores(&signal_semaphores)
+            .build();
 
         unsafe {
             self.device.logical_device().queue_submit(
                 self.device.graphics_queue(),
-                &[*submit_info],
-                frame_data.submission_fence
+                &[submit_info],
+                submission_fence
             ).map_err(|e| CommandError::Submission(e.to_string()))?;
         }
 
-        frame_data.is_submitted = true;
+        // Update the submission status
+        {
+            let current_frame = *self.current_frame.read();
+            let frame_index = ((current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight) as usize;
+            let mut frames = self.frames_in_flight.write();
+            frames[frame_index].is_submitted = true;
+        }
 
         Ok(())
     }
 
     pub async fn wait_for_frame(&self, frame_index: u32) -> Result<()> {
         let frames = self.frames_in_flight.read();
-        let frame_data = &frames[frame_index as usize % self.max_frames_in_flight as usize];
+        let frame_data = &frames[(frame_index % self.max_frames_in_flight) as usize];
 
         if frame_data.is_submitted {
             unsafe {
@@ -455,7 +483,7 @@ impl CommandManager {
 
     pub fn get_frame_semaphores(&self, frame_index: u32) -> (vk::Semaphore, vk::Semaphore) {
         let frames = self.frames_in_flight.read();
-        let frame_data = &frames[frame_index as usize % self.max_frames_in_flight as usize];
+        let frame_data = &frames[(frame_index % self.max_frames_in_flight) as usize];
         (frame_data.image_available_semaphore, frame_data.render_finished_semaphore)
     }
 

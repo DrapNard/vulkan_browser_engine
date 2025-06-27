@@ -4,7 +4,7 @@ use tokio::sync::RwLock;
 use v8::{
     HandleScope, FunctionCallbackArguments, ReturnValue, 
     PromiseResolver, Object, Function, String as V8String, 
-    Local, Context, TryCatch
+    Local, TryCatch
 };
 use tracing::{info, warn, error, debug};
 

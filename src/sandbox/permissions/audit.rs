@@ -2,15 +2,41 @@ use super::{Capability, ProcessPermissions, ResourceLimits, ResourceUsage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc, Notify};
 use tracing::log;
 
 pub struct SecurityAuditor {
-    audit_log: Arc<RwLock<Vec<AuditEvent>>>,
-    file_writer: Arc<tokio::sync::Mutex<Option<tokio::fs::File>>>,
-    metrics: Arc<RwLock<SecurityMetrics>>,
+    event_buffer: Arc<RwLock<CircularBuffer<AuditEvent>>>,
+    file_writer: Arc<FileWriter>,
+    metrics: Arc<AtomicMetrics>,
+    event_sender: mpsc::UnboundedSender<AuditEvent>,
+    shutdown_signal: Arc<Notify>,
+}
+
+struct CircularBuffer<T> {
+    buffer: Vec<Option<T>>,
+    head: usize,
+    size: usize,
+    capacity: usize,
+}
+
+struct FileWriter {
+    sender: mpsc::UnboundedSender<String>,
+    file_handle: Arc<tokio::sync::Mutex<Option<tokio::fs::File>>>,
+}
+
+struct AtomicMetrics {
+    total_events: AtomicU64,
+    security_violations: AtomicU64,
+    permission_denials: AtomicU64,
+    resource_violations: AtomicU64,
+    active_processes: AtomicU32,
+    high_risk_processes: AtomicU32,
+    severity_counters: [AtomicU64; 5],
+    process_counters: Arc<RwLock<HashMap<u32, AtomicU64>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +66,7 @@ pub enum AuditEventType {
     ResourceLimitUpdate,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SeverityLevel {
     Critical = 0,
     High = 1,
@@ -49,7 +75,7 @@ pub enum SeverityLevel {
     Info = 4,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct SecurityMetrics {
     pub total_events: u64,
     pub security_violations: u64,
@@ -77,12 +103,12 @@ pub struct RiskAssessment {
     pub threat_indicators: Vec<ThreatIndicator>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, PartialOrd)]
 pub enum RiskLevel {
-    Low,
-    Medium,
-    High,
-    Critical,
+    Low = 0,
+    Medium = 1,
+    High = 2,
+    Critical = 3,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,73 +121,278 @@ pub struct ThreatIndicator {
     pub count: u32,
 }
 
-impl SecurityAuditor {
-    pub fn new() -> Self {
-        let auditor = Self {
-            audit_log: Arc::new(RwLock::new(Vec::new())),
-            file_writer: Arc::new(tokio::sync::Mutex::new(None)),
-            metrics: Arc::new(RwLock::new(SecurityMetrics::default())),
+pub struct CircularBufferIterator<'a, T> {
+    buffer: &'a [Option<T>],
+    start: usize,
+    end: usize,
+    len: usize,
+    capacity: usize,
+}
+
+impl<T> CircularBuffer<T> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            buffer: (0..capacity).map(|_| None).collect(),
+            head: 0,
+            size: 0,
+            capacity,
+        }
+    }
+
+    fn push(&mut self, item: T) {
+        self.buffer[self.head] = Some(item);
+        self.head = (self.head + 1) % self.capacity;
+        if self.size < self.capacity {
+            self.size += 1;
+        }
+    }
+
+    fn iter(&self) -> CircularBufferIterator<T> {
+        let start = if self.size == self.capacity {
+            self.head
+        } else {
+            0
         };
-
-        auditor.init_file_writer();
-        auditor.start_metrics_aggregator();
-        auditor
-    }
-
-    fn init_file_writer(&self) {
-        let file_writer = self.file_writer.clone();
-        tokio::spawn(async move {
-            match OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("security_audit.log")
-                .await
-            {
-                Ok(file) => {
-                    *file_writer.lock().await = Some(file);
-                }
-                Err(e) => {
-                    log::error!("Failed to open audit log file: {}", e);
-                }
-            }
-        });
-    }
-
-    fn start_metrics_aggregator(&self) {
-        let metrics = self.metrics.clone();
-        let audit_log = self.audit_log.clone();
         
+        CircularBufferIterator {
+            buffer: &self.buffer,
+            start,
+            end: (start + self.size) % self.capacity,
+            len: self.size,
+            capacity: self.capacity,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.size
+    }
+}
+
+impl<'a, T> Iterator for CircularBufferIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let current = self.start;
+        self.start = (self.start + 1) % self.capacity;
+        self.len -= 1;
+
+        self.buffer[current].as_ref()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for CircularBufferIterator<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.len == 0 {
+            return None;
+        }
+
+        self.end = (self.end + self.capacity - 1) % self.capacity;
+        self.len -= 1;
+
+        self.buffer[self.end].as_ref()
+    }
+}
+
+impl<'a, T> ExactSizeIterator for CircularBufferIterator<'a, T> {
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+impl AtomicMetrics {
+    fn new() -> Self {
+        Self {
+            total_events: AtomicU64::new(0),
+            security_violations: AtomicU64::new(0),
+            permission_denials: AtomicU64::new(0),
+            resource_violations: AtomicU64::new(0),
+            active_processes: AtomicU32::new(0),
+            high_risk_processes: AtomicU32::new(0),
+            severity_counters: [
+                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                AtomicU64::new(0), AtomicU64::new(0),
+            ],
+            process_counters: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    async fn increment_event(&self, event: &AuditEvent) {
+        self.total_events.fetch_add(1, Ordering::Relaxed);
+        self.severity_counters[event.severity as usize].fetch_add(1, Ordering::Relaxed);
+
+        match event.event_type {
+            AuditEventType::SecurityViolation => {
+                self.security_violations.fetch_add(1, Ordering::Relaxed);
+            }
+            AuditEventType::PermissionDenied => {
+                self.permission_denials.fetch_add(1, Ordering::Relaxed);
+            }
+            AuditEventType::ResourceViolation => {
+                self.resource_violations.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+
+        let mut process_counters = self.process_counters.write().await;
+        process_counters
+            .entry(event.process_id)
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn to_security_metrics(&self) -> SecurityMetrics {
+        let process_counters = self.process_counters.read().await;
+        
+        SecurityMetrics {
+            total_events: self.total_events.load(Ordering::Relaxed),
+            security_violations: self.security_violations.load(Ordering::Relaxed),
+            permission_denials: self.permission_denials.load(Ordering::Relaxed),
+            resource_violations: self.resource_violations.load(Ordering::Relaxed),
+            active_processes: self.active_processes.load(Ordering::Relaxed),
+            high_risk_processes: self.high_risk_processes.load(Ordering::Relaxed),
+            events_by_severity: [
+                (SeverityLevel::Critical, self.severity_counters[0].load(Ordering::Relaxed)),
+                (SeverityLevel::High, self.severity_counters[1].load(Ordering::Relaxed)),
+                (SeverityLevel::Medium, self.severity_counters[2].load(Ordering::Relaxed)),
+                (SeverityLevel::Low, self.severity_counters[3].load(Ordering::Relaxed)),
+                (SeverityLevel::Info, self.severity_counters[4].load(Ordering::Relaxed)),
+            ].into_iter().collect(),
+            events_by_process: process_counters
+                .iter()
+                .map(|(pid, counter)| (*pid, counter.load(Ordering::Relaxed)))
+                .collect(),
+        }
+    }
+}
+
+impl FileWriter {
+    fn new() -> Self {
+        let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+        let file_handle = Arc::new(tokio::sync::Mutex::new(None));
+        let file_handle_clone = Arc::clone(&file_handle);
+
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            
+            let mut batch = Vec::with_capacity(100);
+            let mut flush_interval = tokio::time::interval(std::time::Duration::from_millis(500));
+
             loop {
-                interval.tick().await;
-                Self::aggregate_metrics(metrics.clone(), audit_log.clone()).await;
+                tokio::select! {
+                    msg = receiver.recv() => {
+                        match msg {
+                            Some(line) => {
+                                batch.push(line);
+                                if batch.len() >= 100 {
+                                    Self::flush_batch(&file_handle_clone, &mut batch).await;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = flush_interval.tick() => {
+                        if !batch.is_empty() {
+                            Self::flush_batch(&file_handle_clone, &mut batch).await;
+                        }
+                    }
+                }
+            }
+
+            if !batch.is_empty() {
+                Self::flush_batch(&file_handle_clone, &mut batch).await;
             }
         });
+
+        Self { sender, file_handle }
     }
 
-    async fn aggregate_metrics(
-        metrics: Arc<RwLock<SecurityMetrics>>,
-        audit_log: Arc<RwLock<Vec<AuditEvent>>>,
-    ) {
-        let events = audit_log.read().await;
-        let mut metrics_guard = metrics.write().await;
-        
-        metrics_guard.total_events = events.len() as u64;
-        metrics_guard.events_by_severity.clear();
-        metrics_guard.events_by_process.clear();
-        
-        for event in events.iter() {
-            *metrics_guard.events_by_severity.entry(event.severity).or_insert(0) += 1;
-            *metrics_guard.events_by_process.entry(event.process_id).or_insert(0) += 1;
-            
-            match event.event_type {
-                AuditEventType::SecurityViolation => metrics_guard.security_violations += 1,
-                AuditEventType::PermissionDenied => metrics_guard.permission_denials += 1,
-                AuditEventType::ResourceViolation => metrics_guard.resource_violations += 1,
-                _ => {}
+    async fn flush_batch(file_handle: &Arc<tokio::sync::Mutex<Option<tokio::fs::File>>>, batch: &mut Vec<String>) {
+        if let Some(file) = file_handle.lock().await.as_mut() {
+            let combined = batch.join("\n") + "\n";
+            if let Err(e) = file.write_all(combined.as_bytes()).await {
+                log::error!("Failed to write audit batch to file: {}", e);
+            } else if let Err(e) = file.flush().await {
+                log::error!("Failed to flush audit file: {}", e);
             }
+        }
+        batch.clear();
+    }
+
+    async fn write_line(&self, line: String) {
+        if let Err(_) = self.sender.send(line) {
+            log::error!("Audit file writer channel closed");
+        }
+    }
+
+    async fn initialize(&self) {
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("security_audit.log")
+            .await
+        {
+            Ok(file) => {
+                *self.file_handle.lock().await = Some(file);
+                log::info!("Security audit log file initialized");
+            }
+            Err(e) => {
+                log::error!("Failed to open audit log file: {}", e);
+            }
+        }
+    }
+}
+
+impl SecurityAuditor {
+    pub async fn new() -> Self {
+        let (event_sender, mut event_receiver) = mpsc::unbounded_channel::<AuditEvent>();
+        let event_buffer = Arc::new(RwLock::new(CircularBuffer::new(10000)));
+        let file_writer = Arc::new(FileWriter::new());
+        let metrics = Arc::new(AtomicMetrics::new());
+        let shutdown_signal = Arc::new(Notify::new());
+
+        file_writer.initialize().await;
+
+        let buffer_clone = Arc::clone(&event_buffer);
+        let file_writer_clone = Arc::clone(&file_writer);
+        let metrics_clone = Arc::clone(&metrics);
+        let shutdown_clone = Arc::clone(&shutdown_signal);
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    event = event_receiver.recv() => {
+                        match event {
+                            Some(audit_event) => {
+                                buffer_clone.write().await.push(audit_event.clone());
+                                metrics_clone.increment_event(&audit_event).await;
+                                
+                                let json_line = serde_json::to_string(&audit_event)
+                                    .unwrap_or_else(|_| "SERIALIZATION_ERROR".to_string());
+                                file_writer_clone.write_line(json_line).await;
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = shutdown_clone.notified() => {
+                        log::info!("SecurityAuditor event processor shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            event_buffer,
+            file_writer,
+            metrics,
+            event_sender,
+            shutdown_signal,
         }
     }
 
@@ -279,40 +510,15 @@ impl SecurityAuditor {
     }
 
     async fn record_event(&self, event: AuditEvent) {
-        {
-            let mut log = self.audit_log.write().await;
-            log.push(event.clone());
-            
-            if log.len() > 10000 {
-                log.drain(0..1000);
-            }
-        }
-
-        self.write_to_file(&event).await;
-        
-        {
-            let mut metrics = self.metrics.write().await;
-            metrics.total_events += 1;
-            *metrics.events_by_severity.entry(event.severity).or_insert(0) += 1;
-            *metrics.events_by_process.entry(event.process_id).or_insert(0) += 1;
-        }
-    }
-
-    async fn write_to_file(&self, event: &AuditEvent) {
-        if let Some(file) = self.file_writer.lock().await.as_mut() {
-            let json_line = serde_json::to_string(event)
-                .unwrap_or_else(|_| "SERIALIZATION_ERROR".to_string());
-            
-            if let Err(e) = file.write_all(format!("{}\n", json_line).as_bytes()).await {
-                log::error!("Failed to write audit event to file: {}", e);
-            }
+        if let Err(_) = self.event_sender.send(event) {
+            log::error!("Failed to send audit event - channel closed");
         }
     }
 
     pub async fn generate_security_report(&self) -> SecurityReport {
-        let metrics = self.metrics.read().await.clone();
+        let metrics = self.metrics.to_security_metrics().await;
         let recent_violations = self.get_recent_violations().await;
-        let risk_assessment = self.assess_risk().await;
+        let risk_assessment = self.assess_risk(&metrics).await;
         let recommendations = self.generate_recommendations(&metrics, &risk_assessment);
 
         SecurityReport {
@@ -325,10 +531,10 @@ impl SecurityAuditor {
     }
 
     async fn get_recent_violations(&self) -> Vec<AuditEvent> {
-        let log = self.audit_log.read().await;
+        let buffer = self.event_buffer.read().await;
         let cutoff_time = self.current_timestamp() - (24 * 60 * 60 * 1000);
         
-        log.iter()
+        buffer.iter()
             .filter(|event| {
                 event.timestamp > cutoff_time && 
                 matches!(event.event_type, 
@@ -341,42 +547,34 @@ impl SecurityAuditor {
             .collect()
     }
 
-    async fn assess_risk(&self) -> RiskAssessment {
-        let metrics = self.metrics.read().await;
-        let log = self.audit_log.read().await;
-        
+    async fn assess_risk(&self, metrics: &SecurityMetrics) -> RiskAssessment {
         let mut process_risk_scores = HashMap::new();
         let mut threat_indicators = Vec::new();
         
         for (process_id, event_count) in &metrics.events_by_process {
-            let violation_count = log.iter()
-                .filter(|e| e.process_id == *process_id && 
-                    matches!(e.event_type, AuditEventType::SecurityViolation | AuditEventType::ResourceViolation))
-                .count();
+            if *event_count == 0 { continue; }
             
+            let violation_count = self.count_process_violations(*process_id).await;
             let risk_score = (violation_count as f64 / *event_count as f64) * 100.0;
             process_risk_scores.insert(*process_id, risk_score);
             
             if risk_score > 20.0 {
                 threat_indicators.push(ThreatIndicator {
                     indicator_type: "High violation rate".to_string(),
-                    description: format!("Process {} has {}% violation rate", process_id, risk_score),
-                    confidence: risk_score / 100.0,
+                    description: format!("Process {} has {:.1}% violation rate", process_id, risk_score),
+                    confidence: (risk_score / 100.0).min(1.0),
                     first_seen: self.current_timestamp() - 86400000,
                     last_seen: self.current_timestamp(),
-                    count: violation_count as u32,
+                    count: violation_count,
                 });
             }
         }
 
-        let overall_risk_level = if metrics.security_violations > 10 {
-            RiskLevel::Critical
-        } else if metrics.security_violations > 5 {
-            RiskLevel::High
-        } else if metrics.resource_violations > 20 {
-            RiskLevel::Medium
-        } else {
-            RiskLevel::Low
+        let overall_risk_level = match () {
+            _ if metrics.security_violations > 10 => RiskLevel::Critical,
+            _ if metrics.security_violations > 5 => RiskLevel::High,
+            _ if metrics.resource_violations > 20 => RiskLevel::Medium,
+            _ => RiskLevel::Low,
         };
 
         RiskAssessment {
@@ -384,6 +582,14 @@ impl SecurityAuditor {
             process_risk_scores,
             threat_indicators,
         }
+    }
+
+    async fn count_process_violations(&self, process_id: u32) -> u32 {
+        let buffer = self.event_buffer.read().await;
+        buffer.iter()
+            .filter(|e| e.process_id == process_id && 
+                matches!(e.event_type, AuditEventType::SecurityViolation | AuditEventType::ResourceViolation))
+            .count() as u32
     }
 
     fn generate_recommendations(&self, metrics: &SecurityMetrics, risk: &RiskAssessment) -> Vec<String> {
@@ -446,8 +652,8 @@ impl SecurityAuditor {
     }
 
     pub async fn get_audit_events(&self, process_id: Option<u32>, limit: Option<usize>) -> Vec<AuditEvent> {
-        let log = self.audit_log.read().await;
-        let filtered: Vec<AuditEvent> = log.iter()
+        let buffer = self.event_buffer.read().await;
+        let filtered: Vec<AuditEvent> = buffer.iter()
             .filter(|event| process_id.map_or(true, |pid| event.process_id == pid))
             .rev()
             .take(limit.unwrap_or(100))
@@ -456,10 +662,19 @@ impl SecurityAuditor {
         
         filtered
     }
+
+    pub async fn get_metrics(&self) -> SecurityMetrics {
+        self.metrics.to_security_metrics().await
+    }
+
+    pub async fn shutdown(&self) {
+        self.shutdown_signal.notify_waiters();
+        log::info!("SecurityAuditor shutdown signal sent");
+    }
 }
 
 impl Default for SecurityAuditor {
     fn default() -> Self {
-        Self::new()
+        futures::executor::block_on(Self::new())
     }
 }

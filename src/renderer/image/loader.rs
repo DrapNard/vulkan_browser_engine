@@ -3,7 +3,7 @@ use crate::renderer::gpu::{GpuContext, Texture};
 use ash::vk;
 use image::{DynamicImage, ImageFormat};
 use std::io::Cursor;
-use std::sync::Arc;
+use base64::engine::Engine; // Import the trait for decode method
 
 pub struct ImageLoader {
     supported_formats: Vec<ImageFormat>,
@@ -23,15 +23,24 @@ impl ImageLoader {
         }
     }
 
-    pub async fn load_image(&self, url: &str) -> Result<Texture, ImageError> {
+    pub async fn load_image(&self, url: &str, gpu_context: &GpuContext) -> Result<Texture, ImageError> {
         let image_data = self.fetch_image_data(url).await?;
         let image = self.decode_image(&image_data)?;
-        self.create_texture_from_image(image).await
+        self.create_texture_with_context(image, gpu_context)
     }
 
-    pub async fn load_image_from_bytes(&self, data: &[u8]) -> Result<Texture, ImageError> {
+    pub async fn load_image_from_bytes(&self, data: &[u8], gpu_context: &GpuContext) -> Result<Texture, ImageError> {
         let image = self.decode_image(data)?;
-        self.create_texture_from_image(image).await
+        self.create_texture_with_context(image, gpu_context)
+    }
+
+    pub async fn load_image_data(&self, url: &str) -> Result<DynamicImage, ImageError> {
+        let image_data = self.fetch_image_data(url).await?;
+        self.decode_image(&image_data)
+    }
+
+    pub fn load_image_data_from_bytes(&self, data: &[u8]) -> Result<DynamicImage, ImageError> {
+        self.decode_image(data)
     }
 
     async fn fetch_image_data(&self, url: &str) -> Result<Vec<u8>, ImageError> {
@@ -47,7 +56,8 @@ impl ImageLoader {
     fn parse_data_url(&self, url: &str) -> Result<Vec<u8>, ImageError> {
         if let Some(comma_pos) = url.find(',') {
             let data_part = &url[comma_pos + 1..];
-            base64::decode(data_part)
+            base64::engine::general_purpose::STANDARD
+                .decode(data_part)
                 .map_err(|e| ImageError::DecodeError(e.to_string()))
         } else {
             Err(ImageError::DecodeError("Invalid data URL".to_string()))
@@ -90,16 +100,6 @@ impl ImageLoader {
         let cursor = Cursor::new(data);
         image::load(cursor, format)
             .map_err(|e| ImageError::DecodeError(e.to_string()))
-    }
-
-    async fn create_texture_from_image(&self, image: DynamicImage) -> Result<Texture, ImageError> {
-        let rgba_image = image.to_rgba8();
-        let (width, height) = rgba_image.dimensions();
-        let image_data = rgba_image.into_raw();
-
-        // This would need access to the GPU context
-        // For now, we'll return a placeholder error
-        Err(ImageError::LoadError("GPU context not available".to_string()))
     }
 
     pub fn create_texture_with_context(
@@ -175,6 +175,14 @@ impl ImageLoader {
         data
     }
 
+    pub fn create_placeholder_texture_with_context(&self, width: u32, height: u32, color: [u8; 4], gpu_context: &GpuContext) -> Result<Texture, ImageError> {
+        let data = self.create_placeholder_texture(width, height, color);
+        let image = image::RgbaImage::from_raw(width, height, data)
+            .ok_or_else(|| ImageError::LoadError("Failed to create placeholder image".to_string()))?;
+        let dynamic_image = DynamicImage::ImageRgba8(image);
+        self.create_texture_with_context(dynamic_image, gpu_context)
+    }
+
     pub async fn create_texture_atlas(&self, images: &[DynamicImage]) -> Result<DynamicImage, ImageError> {
         if images.is_empty() {
             return Err(ImageError::LoadError("No images provided".to_string()));
@@ -193,6 +201,11 @@ impl ImageLoader {
         }
 
         Ok(DynamicImage::ImageRgba8(atlas))
+    }
+
+    pub async fn create_texture_atlas_with_context(&self, images: &[DynamicImage], gpu_context: &GpuContext) -> Result<Texture, ImageError> {
+        let atlas_image = self.create_texture_atlas(images).await?;
+        self.create_texture_with_context(atlas_image, gpu_context)
     }
 }
 

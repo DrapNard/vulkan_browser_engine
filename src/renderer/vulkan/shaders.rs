@@ -2,15 +2,13 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::fs;
-use ash::{Device, vk};
+use ash::vk;
 use parking_lot::{RwLock, Mutex};
 use dashmap::DashMap;
-use smallvec::SmallVec;
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
 use ahash::AHasher;
 use std::hash::{Hash, Hasher};
-
 use super::device::VulkanDevice;
 
 #[derive(Error, Debug)]
@@ -80,7 +78,7 @@ pub struct ShaderSource {
     pub optimization_level: OptimizationLevel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OptimizationLevel {
     None,
     Size,
@@ -185,7 +183,6 @@ impl ShaderCompiler {
                 return Some(PathBuf::from(candidate));
             }
         }
-
         None
     }
 
@@ -206,7 +203,6 @@ impl ShaderCompiler {
                 return Some(PathBuf::from(candidate));
             }
         }
-
         None
     }
 
@@ -351,7 +347,7 @@ impl ShaderCompiler {
         Ok(())
     }
 
-    fn reflect_spirv(&self, spirv_code: &[u32]) -> Result<ShaderReflection> {
+    fn reflect_spirv(&self, _spirv_code: &[u32]) -> Result<ShaderReflection> {
         Ok(ShaderReflection::default())
     }
 }
@@ -418,7 +414,13 @@ impl ShaderManager {
         source.glsl_code.hash(&mut hasher);
         source.entry_point.hash(&mut hasher);
         source.stage.hash(&mut hasher);
-        source.defines.hash(&mut hasher);
+        // Hash the defines in a deterministic order
+        let mut defines_vec: Vec<_> = source.defines.iter().collect();
+        defines_vec.sort_by(|a, b| a.0.cmp(b.0));
+        for (k, v) in defines_vec {
+            k.hash(&mut hasher);
+            v.hash(&mut hasher);
+        }
         source.optimization_level.hash(&mut hasher);
         hasher.finish()
     }
@@ -517,10 +519,10 @@ impl ShaderManager {
             stage,
             include_paths: vec![path.parent().unwrap_or(Path::new(".")).to_path_buf()],
             defines: HashMap::new(),
-            optimization_level: if cfg!(debug_assertions) { 
-                OptimizationLevel::Debug 
-            } else { 
-                OptimizationLevel::Performance 
+            optimization_level: if cfg!(debug_assertions) {
+                OptimizationLevel::Debug
+            } else {
+                OptimizationLevel::Performance
             },
         };
 
@@ -593,6 +595,7 @@ impl ShaderManager {
             .blend_enable(false);
 
         let color_blend_attachments = [*color_blend_attachment];
+
         let color_blending = vk::PipelineColorBlendStateCreateInfo::builder()
             .logic_op_enable(false)
             .logic_op(vk::LogicOp::COPY)
@@ -681,7 +684,6 @@ impl ShaderManager {
         }
 
         self.shader_cache.clear();
-
         Ok(())
     }
 }

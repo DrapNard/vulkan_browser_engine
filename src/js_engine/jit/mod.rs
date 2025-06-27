@@ -291,7 +291,7 @@ impl JITCompiler {
             context.func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature.clone());
 
             {
-                let mut builder = FunctionBuilder::new(&mut context.func, &mut *builder_context);
+                let builder = FunctionBuilder::new(&mut context.func, &mut *builder_context);
                 self.compile_function_body(builder, js_function)?;
             }
 
@@ -338,7 +338,7 @@ impl JITCompiler {
         Ok(sig)
     }
 
-    fn compile_function_body(&self, mut builder: FunctionBuilder, js_function: &JSFunction) -> Result<()> {
+    fn compile_function_body(&self, mut builder: FunctionBuilder, _js_function: &JSFunction) -> Result<()> {
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
     builder.switch_to_block(entry_block);
