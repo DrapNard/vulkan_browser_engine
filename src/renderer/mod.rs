@@ -4,6 +4,8 @@ pub mod pipeline;
 pub mod text;
 pub mod vulkan;
 
+use crate::core::layout::LayoutBox;
+use crate::core::dom::NodeId;
 use crate::core::dom::Document;
 use ash::vk;
 use thiserror::Error;
@@ -81,6 +83,27 @@ impl LayoutTree {
         } else {
             self.nodes.push(node);
         }
+    }
+
+    pub fn from_layout_box(
+        &mut self,
+        node_id: NodeId,
+        layout_box: LayoutBox,
+        element_type: ElementType, // Replace with your actual element type
+    ) {
+        let layout_node = LayoutNode {
+            bounds: Rect {
+                x: layout_box.content_x,
+                y: layout_box.content_y,
+                width: layout_box.content_width,
+                height: layout_box.content_height,
+            },
+            element_type,
+            style: Style::default(),
+            text_content: None,
+            image_url: None,
+        };
+        self.add_node(layout_node);
     }
 }
 

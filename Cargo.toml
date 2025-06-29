@@ -25,7 +25,8 @@ tracy = ["dep:tracy-client"]
 debug = ["tracy"]
 
 [dependencies]
-tokio = { version = "1.36", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net", "io-util", "process"] }
+tokio = { version = "1.36", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net", "io-util", "process", "signal"] }
+env_logger = "0.10"
 async-trait = "0.1.77"
 futures = "0.3.30"
 parking_lot = "0.12.1"

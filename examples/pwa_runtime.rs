@@ -1,4 +1,4 @@
-use vulkan_renderer::pwa::{PwaRuntime, Manifest};
+use vulkan_browser_engine::pwa::{PwaRuntime::Manifest, PwaRuntime};
 use std::path::Path;
 
 #[tokio::main]

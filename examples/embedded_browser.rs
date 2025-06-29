@@ -1,4 +1,4 @@
-use vulkan_renderer::{BrowserEngine, Config, EmbeddedMode};
+use vulkan_browser_engine::{BrowserEngine, BrowserConfig as Config};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {

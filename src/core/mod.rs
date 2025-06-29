@@ -5,7 +5,7 @@ pub mod layout;
 pub mod network;
 
 use crate::js_engine::{JSRuntime, JSError};
-use crate::renderer::{VulkanRenderer, RenderError, LayoutTree};
+use crate::renderer::{VulkanRenderer, RenderError, LayoutTree, ElementType};
 use css::computed::StyleEngine;
 use dom::Document;
 use events::EventSystem;
@@ -16,12 +16,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::BrowserConfig;
-
-// Converts a core::layout::LayoutBox to a renderer::LayoutTree
-fn from_layout_box(layout_box: &layout::LayoutBox) -> LayoutTree {
-    // TODO: Implement actual conversion logic
-    LayoutTree::from_layout_box(layout_box)
-}
 
 pub struct CoreEngine {
     pub dom: Arc<RwLock<Document>>,
@@ -81,12 +75,19 @@ impl CoreEngine {
     }
 
     pub async fn render_frame(&mut self) -> Result<(), CoreError> {
-        let doc_guard = self.dom.read().await;
-        let root_node_id = doc_guard.get_root_node().ok_or_else(|| CoreError::ParseError("No root node found".to_string()))?;
-        let layout_root = self.layout_engine.get_layout_box(root_node_id);
-        let layout_box = layout_root.as_ref().ok_or_else(|| CoreError::ParseError("No layout tree found".to_string()))?;
-        let layout_tree = from_layout_box(layout_box); // Convert to renderer::LayoutTree
-        self.renderer.render(&*doc_guard, &layout_tree).await?;
-        Ok(())
-    }
+    let doc_guard = self.dom.read().await;
+    let root_node_id = doc_guard.get_root_node().ok_or_else(|| CoreError::ParseError("No root node found".to_string()))?;
+    let layout_root = self.layout_engine.get_layout_box(root_node_id);
+    let layout_box = layout_root.as_ref().ok_or_else(|| CoreError::ParseError("No layout tree found".to_string()))?;
+    
+    let mut layout_tree = LayoutTree::new();
+    layout_tree.from_layout_box(
+        root_node_id,
+        layout_box.clone(),
+        ElementType::Block // or ElementType::Div, ElementType::Document, etc.
+    );
+    
+    self.renderer.render(&*doc_guard, &layout_tree).await?;
+    Ok(())
+}
 }

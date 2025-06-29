@@ -1,4 +1,4 @@
-use vulkan_renderer::{BrowserEngine, Config, DisplayMode};
+use vulkan_browser_engine::{BrowserEngine, BrowserConfig as Config};
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -85,7 +85,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn next_token(&mut self) -> Option<Token> {
-        while let Some(ch) = self.current {
+        if let Some(ch) = self.current {
             match ch {
                 ' ' | '\t' | '\n' | '\r' => {
                     self.consume_whitespace();
