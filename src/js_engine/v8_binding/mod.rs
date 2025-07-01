@@ -3,8 +3,20 @@ pub mod callbacks;
 pub use callbacks::*;
 
 use crate::js_engine::gc::GarbageCollector;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use v8::{HandleScope, Local, TryCatch};
+
+// Global V8 initialization state
+static INIT_V8: Once = Once::new();
+static DISPOSE_V8: Once = Once::new();
+static V8_STATE: Mutex<V8State> = Mutex::new(V8State::Uninitialized);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum V8State {
+    Uninitialized,
+    Initialized,
+    Disposed,
+}
 
 pub struct V8Runtime {
     isolate: v8::OwnedIsolate,
@@ -14,9 +26,8 @@ pub struct V8Runtime {
 
 impl V8Runtime {
     pub fn new() -> Result<Self, V8Error> {
-        let platform = v8::new_default_platform(0, false).make_shared();
-        v8::V8::initialize_platform(platform);
-        v8::V8::initialize();
+        // Initialize V8 only once per process
+        Self::ensure_v8_initialized()?;
 
         let mut isolate = v8::Isolate::new(v8::CreateParams::default());
         
@@ -33,6 +44,62 @@ impl V8Runtime {
             context,
             gc,
         })
+    }
+
+    fn ensure_v8_initialized() -> Result<(), V8Error> {
+        let mut init_result = Ok(());
+        
+        INIT_V8.call_once(|| {
+            match Self::initialize_v8() {
+                Ok(_) => {
+                    if let Ok(mut state) = V8_STATE.lock() {
+                        *state = V8State::Initialized;
+                    } else {
+                        init_result = Err(V8Error::InitializationFailed);
+                    }
+                },
+                Err(e) => {
+                    init_result = Err(e);
+                }
+            }
+        });
+
+        // Check if initialization was successful
+        if init_result.is_ok() {
+            let state = V8_STATE.lock().map_err(|_| V8Error::InitializationFailed)?;
+            if *state != V8State::Initialized {
+                return Err(V8Error::InitializationFailed);
+            }
+        }
+
+        init_result
+    }
+
+    fn initialize_v8() -> Result<(), V8Error> {
+        let platform = v8::new_default_platform(0, false).make_shared();
+        v8::V8::initialize_platform(platform);
+        v8::V8::initialize();
+        Ok(())
+    }
+
+    pub fn dispose_v8() {
+        DISPOSE_V8.call_once(|| {
+            if let Ok(mut state) = V8_STATE.lock() {
+                if *state == V8State::Initialized {
+                    unsafe {
+                        v8::V8::dispose();
+                    }
+                    v8::V8::dispose_platform();
+                    *state = V8State::Disposed;
+                }
+            }
+        });
+    }
+
+    pub fn is_v8_initialized() -> bool {
+        V8_STATE.lock()
+            .map(|state| *state == V8State::Initialized)
+            .unwrap_or(false)
     }
 
     fn with_context_scope<T, F>(&mut self, f: F) -> T
@@ -320,10 +387,8 @@ unsafe impl Sync for V8Runtime {}
 impl Drop for V8Runtime {
     fn drop(&mut self) {
         self.force_gc();
-        unsafe {
-            v8::V8::dispose();
-        }
-        v8::V8::dispose_platform();
+        // Note: We don't dispose V8 here as it should only be disposed once per process
+        // V8 disposal should happen at application shutdown via V8Runtime::dispose_v8()
     }
 }
 
@@ -343,4 +408,6 @@ pub enum V8Error {
     TypeConversionError,
     #[error("Garbage collection failed")]
     GarbageCollectionFailed,
+    #[error("V8 initialization failed")]
+    InitializationFailed,
 }
