@@ -6,7 +6,7 @@ authors = ["Browser Engine Team"]
 description = "High-performance browser engine with Vulkan rendering and JIT compilation"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/browser-engine/vulkan-browser"
-rust-version = "1.75"
+rust-version = "1.80"
 
 [features]
 default = ["vulkan", "jit", "pwa", "sandbox"]

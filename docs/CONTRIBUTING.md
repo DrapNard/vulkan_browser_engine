@@ -2,7 +2,7 @@
 
 ## Development Setup
 
-1. Install Rust toolchain (1.70+)
+1. Install Rust toolchain (1.80+)
 2. Install Vulkan SDK
 3. Clone repository and run `./install.sh`
 

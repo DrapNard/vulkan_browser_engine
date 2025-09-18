@@ -1,8 +1,10 @@
 use vulkan_browser_engine::{BrowserEngine, BrowserConfig as Config};
 use winit::{event::Event, event_loop::EventLoop, window::WindowBuilder};
+use std::env;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env::set_var("RUST_BACKTRACE", "full");
     env_logger::init();
    
     let event_loop = EventLoop::new()?;
@@ -12,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build(&event_loop)?;
     
     let config = Config::default();
-    let mut engine = BrowserEngine::new(config).await?;
+    let engine = BrowserEngine::new(config).await?;
    
     engine.load_url("https://example.com").await?;
    
