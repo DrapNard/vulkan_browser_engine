@@ -252,7 +252,7 @@ impl Buffer {
     pub fn is_mapped(&self) -> bool {
         self.allocation
             .as_ref()
-            .map_or(false, |alloc| alloc.mapped_ptr().is_some())
+            .is_some_and(|alloc| alloc.mapped_ptr().is_some())
     }
 
     pub fn get_device_address(&self) -> Result<vk::DeviceAddress, GpuError> {

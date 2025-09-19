@@ -99,6 +99,7 @@ pub enum TouchEventType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct KeyModifiers {
     pub ctrl: bool,
     pub alt: bool,
@@ -106,13 +107,3 @@ pub struct KeyModifiers {
     pub meta: bool,
 }
 
-impl Default for KeyModifiers {
-    fn default() -> Self {
-        Self {
-            ctrl: false,
-            alt: false,
-            shift: false,
-            meta: false,
-        }
-    }
-}

@@ -141,6 +141,12 @@ pub struct RenderContext {
     is_initialized: bool,
 }
 
+impl Default for RenderContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RenderContext {
     pub fn new() -> Self {
         Self {

@@ -125,6 +125,7 @@ impl Default for ElementProperties {
 }
 
 #[derive(Clone)]
+#[derive(Default)]
 pub struct ElementInternals {
     pub form_associated: bool,
     pub form_disabled: bool,
@@ -137,21 +138,6 @@ pub struct ElementInternals {
     pub form: Option<NodeId>,
 }
 
-impl Default for ElementInternals {
-    fn default() -> Self {
-        Self {
-            form_associated: false,
-            form_disabled: false,
-            form_reset_callback: None,
-            form_state_restore_callback: None,
-            validation_message: String::new(),
-            validity_state: ValidityState::default(),
-            will_validate: false,
-            labels: Vec::new(),
-            form: None,
-        }
-    }
-}
 
 impl std::fmt::Debug for ElementInternals {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -405,7 +391,7 @@ impl Element {
     pub fn get_bounding_client_rect(&self) -> DOMRect {
         let layout = self.node.get_layout_data();
         let layout_data = layout.read();
-        DOMRect::from_layout_data(&*layout_data)
+        DOMRect::from_layout_data(&layout_data)
     }
 
     pub fn get_client_rects(&self) -> Vec<DOMRect> {

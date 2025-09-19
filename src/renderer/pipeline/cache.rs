@@ -368,8 +368,8 @@ impl PipelineCache {
         
         for pipeline_name in &modified_pipelines {
             if let Some((_, shader_names)) = pipeline_specs.iter().find(|(name, _)| name == pipeline_name) {
-                let vertex_shader = self.load_shader(&shader_names[0]).await?;
-                let fragment_shader = self.load_shader(&shader_names[1]).await?;
+                let vertex_shader = self.load_shader(shader_names[0]).await?;
+                let fragment_shader = self.load_shader(shader_names[1]).await?;
                 
                 manager.reload_pipeline(pipeline_name, Some(&vertex_shader), Some(&fragment_shader))?;
             }

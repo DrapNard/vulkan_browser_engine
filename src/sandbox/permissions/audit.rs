@@ -325,7 +325,7 @@ impl FileWriter {
     }
 
     async fn write_line(&self, line: String) {
-        if let Err(_) = self.sender.send(line) {
+        if self.sender.send(line).is_err() {
             log::error!("Audit file writer channel closed");
         }
     }
@@ -510,7 +510,7 @@ impl SecurityAuditor {
     }
 
     async fn record_event(&self, event: AuditEvent) {
-        if let Err(_) = self.event_sender.send(event) {
+        if self.event_sender.send(event).is_err() {
             log::error!("Failed to send audit event - channel closed");
         }
     }

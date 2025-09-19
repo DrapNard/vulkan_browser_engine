@@ -21,7 +21,9 @@ pub trait NetworkClient: Send + Sync {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum CacheStrategy {
+    #[default]
     CacheFirst,
     NetworkFirst,
     NetworkOnly,
@@ -442,6 +444,12 @@ impl NetworkClient for ReqwestNetworkClient {
     }
 }
 
+impl Default for MockNetworkClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockNetworkClient {
     pub fn new() -> Self {
         Self {
@@ -519,8 +527,3 @@ impl Default for StrategyConfig {
     }
 }
 
-impl Default for CacheStrategy {
-    fn default() -> Self {
-        CacheStrategy::CacheFirst
-    }
-}

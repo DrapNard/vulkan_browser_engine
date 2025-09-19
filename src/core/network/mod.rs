@@ -84,6 +84,7 @@ impl Default for NetworkConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct CachePolicy {
     pub max_age: Option<u64>,
     pub must_revalidate: bool,
@@ -96,21 +97,6 @@ pub struct CachePolicy {
     pub stale_if_error: Option<u64>,
 }
 
-impl Default for CachePolicy {
-    fn default() -> Self {
-        Self {
-            max_age: None,
-            must_revalidate: false,
-            no_cache: false,
-            no_store: false,
-            private: false,
-            public: false,
-            immutable: false,
-            stale_while_revalidate: None,
-            stale_if_error: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry {

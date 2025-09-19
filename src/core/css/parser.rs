@@ -73,14 +73,14 @@ impl<'a> Tokenizer<'a> {
 
     pub fn tokenize(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
-        
+
         while let Some(token) = self.next_token() {
             if matches!(token, Token::EOF) {
                 break;
             }
             tokens.push(token);
         }
-        
+
         tokens
     }
 
@@ -141,7 +141,7 @@ impl<'a> Tokenizer<'a> {
                 }
             }
         }
-        
+
         Some(Token::EOF)
     }
 
@@ -167,9 +167,9 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn consume_while<F>(&mut self, predicate: F) -> String 
-    where 
-        F: Fn(char) -> bool 
+    fn consume_while<F>(&mut self, predicate: F) -> String
+    where
+        F: Fn(char) -> bool,
     {
         let start = self.position;
         while let Some(ch) = self.current {
@@ -189,7 +189,7 @@ impl<'a> Tokenizer<'a> {
     fn consume_comment(&mut self) -> Token {
         self.advance();
         self.advance();
-        
+
         let start = self.position;
         while let Some(ch) = self.current {
             if ch == '*' && self.peek() == Some('/') {
@@ -200,7 +200,7 @@ impl<'a> Tokenizer<'a> {
             }
             self.advance();
         }
-        
+
         Token::Comment(self.input[start..self.position].to_string())
     }
 
@@ -208,26 +208,25 @@ impl<'a> Tokenizer<'a> {
         self.advance();
         let start = self.position;
         let mut end = start;
-        
+
         while let Some(ch) = self.current {
             if ch == quote {
                 let string = self.input[start..end].to_string();
                 self.advance();
                 return Token::String(string);
             }
-            
+
             if ch == '\\' {
                 self.advance();
                 if self.current.is_some() {
                     self.advance();
                 }
-                end = self.position;
             } else {
                 self.advance();
-                end = self.position;
             }
+            end = self.position;
         }
-        
+
         Token::String(self.input[start..end].to_string())
     }
 
@@ -252,22 +251,22 @@ impl<'a> Tokenizer<'a> {
         };
 
         let mut full_number = number_str;
-        
+
         if self.current == Some('.') {
             self.advance();
             let decimal_part = self.consume_while(|ch| ch.is_ascii_digit());
             full_number = format!("{}.{}", full_number, decimal_part);
         }
-        
+
         let number: f32 = full_number.parse().unwrap_or(0.0);
-        
+
         if self.current == Some('%') {
             self.advance();
             return Token::Percentage(number);
         }
-        
+
         let unit = self.consume_while(|ch| ch.is_alphabetic());
-        
+
         if unit.is_empty() {
             Token::Number(number)
         } else {
@@ -277,7 +276,7 @@ impl<'a> Tokenizer<'a> {
 
     fn consume_ident_like(&mut self) -> Token {
         let ident = self.consume_while(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-');
-        
+
         if self.current == Some('(') {
             if ident == "url" {
                 self.consume_url()
@@ -292,11 +291,11 @@ impl<'a> Tokenizer<'a> {
     fn consume_url(&mut self) -> Token {
         self.advance();
         self.consume_while(|ch| ch.is_whitespace());
-        
+
         let mut url = String::new();
         let mut in_quotes = false;
         let mut quote_char = '"';
-        
+
         if let Some(ch) = self.current {
             if ch == '"' || ch == '\'' {
                 in_quotes = true;
@@ -304,7 +303,7 @@ impl<'a> Tokenizer<'a> {
                 self.advance();
             }
         }
-        
+
         while let Some(ch) = self.current {
             if in_quotes {
                 if ch == quote_char {
@@ -323,13 +322,13 @@ impl<'a> Tokenizer<'a> {
                 self.advance();
             }
         }
-        
+
         self.consume_while(|ch| ch.is_whitespace());
-        
+
         if self.current == Some(')') {
             self.advance();
         }
-        
+
         Token::Url(url)
     }
 }
@@ -358,6 +357,12 @@ pub struct SerializableDeclarations {
     pub properties: Vec<(String, String, bool)>,
 }
 
+impl Default for SerializableDeclarations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SerializableDeclarations {
     pub fn new() -> Self {
         Self {
@@ -367,7 +372,8 @@ impl SerializableDeclarations {
 
     pub fn from_declaration(declaration: &CSSStyleDeclaration) -> Self {
         Self {
-            properties: declaration.get_all_properties()
+            properties: declaration
+                .get_all_properties()
                 .into_iter()
                 .map(|(name, value)| (name, value.raw, value.important))
                 .collect(),
@@ -377,7 +383,11 @@ impl SerializableDeclarations {
     pub fn to_declaration(&self) -> CSSStyleDeclaration {
         let declaration = CSSStyleDeclaration::new();
         for (property, value, important) in &self.properties {
-            let _ = declaration.set_property(property, value, if *important { "important" } else { "" });
+            let _ = declaration.set_property(
+                property,
+                value,
+                if *important { "important" } else { "" },
+            );
         }
         declaration
     }
@@ -477,10 +487,10 @@ impl CSSParser {
         self.position = 0;
 
         let mut rules = Vec::new();
-        
+
         while !self.is_at_end() {
             self.skip_whitespace();
-            
+
             if self.is_at_end() {
                 break;
             }
@@ -506,10 +516,10 @@ impl CSSParser {
         };
 
         let mut declarations = Vec::new();
-        
+
         while !parser.is_at_end() {
             parser.skip_whitespace();
-            
+
             if parser.is_at_end() {
                 break;
             }
@@ -526,7 +536,7 @@ impl CSSParser {
 
     fn parse_rule(&mut self) -> Result<CSSRule> {
         self.skip_whitespace();
-        
+
         if let Some(Token::AtKeyword(keyword)) = self.current_token() {
             match keyword.as_str() {
                 "media" => self.parse_media_rule(),
@@ -536,7 +546,10 @@ impl CSSParser {
                 "page" => self.parse_page_rule(),
                 "namespace" => self.parse_namespace_rule(),
                 "supports" => self.parse_supports_rule(),
-                _ => Err(ParseError::InvalidSyntax(format!("Unknown at-rule: @{}", keyword)))
+                _ => Err(ParseError::InvalidSyntax(format!(
+                    "Unknown at-rule: @{}",
+                    keyword
+                ))),
             }
         } else {
             self.parse_style_rule()
@@ -545,18 +558,15 @@ impl CSSParser {
 
     fn parse_style_rule(&mut self) -> Result<CSSRule> {
         let selectors = self.parse_selectors()?;
-        
+
         self.skip_whitespace();
         self.expect_token(&Token::LeftBrace)?;
-        
+
         let declarations = self.parse_declarations_block()?;
-        
+
         self.expect_token(&Token::RightBrace)?;
 
-        let specificity = selectors.iter()
-            .map(|s| s.specificity())
-            .max()
-            .unwrap_or(0);
+        let specificity = selectors.iter().map(|s| s.specificity()).max().unwrap_or(0);
 
         Ok(CSSRule::Style(CSSStyleRule {
             selectors,
@@ -568,17 +578,17 @@ impl CSSParser {
     fn parse_media_rule(&mut self) -> Result<CSSRule> {
         self.advance();
         self.skip_whitespace();
-        
+
         let media_query = self.parse_media_query()?;
-        
+
         self.skip_whitespace();
         self.expect_token(&Token::LeftBrace)?;
-        
+
         let mut rules = Vec::new();
         while !self.check_token(&Token::RightBrace) && !self.is_at_end() {
             rules.push(self.parse_rule()?);
         }
-        
+
         self.expect_token(&Token::RightBrace)?;
 
         Ok(CSSRule::Media(CSSMediaRule {
@@ -590,7 +600,7 @@ impl CSSParser {
     fn parse_import_rule(&mut self) -> Result<CSSRule> {
         self.advance();
         self.skip_whitespace();
-        
+
         let href = match self.current_token() {
             Some(Token::String(s)) => {
                 let href = s.clone();
@@ -602,11 +612,15 @@ impl CSSParser {
                 self.advance();
                 href
             }
-            _ => return Err(ParseError::InvalidSyntax("Expected URL or string in @import".to_string()))
+            _ => {
+                return Err(ParseError::InvalidSyntax(
+                    "Expected URL or string in @import".to_string(),
+                ))
+            }
         };
 
         self.skip_whitespace();
-        
+
         let media_query = if !self.check_token(&Token::Semicolon) && !self.is_at_end() {
             Some(self.parse_media_query()?)
         } else {
@@ -624,48 +638,47 @@ impl CSSParser {
     fn parse_font_face_rule(&mut self) -> Result<CSSRule> {
         self.advance();
         self.skip_whitespace();
-        
+
         self.expect_token(&Token::LeftBrace)?;
         let declarations = self.parse_declarations_block()?;
         self.expect_token(&Token::RightBrace)?;
 
-        Ok(CSSRule::FontFace(CSSFontFaceRule {
-            declarations,
-        }))
+        Ok(CSSRule::FontFace(CSSFontFaceRule { declarations }))
     }
 
     fn parse_keyframes_rule(&mut self) -> Result<CSSRule> {
         self.advance();
         self.skip_whitespace();
-        
+
         let name = match self.current_token() {
             Some(Token::Ident(name)) => {
                 let name = name.clone();
                 self.advance();
                 name
             }
-            _ => return Err(ParseError::InvalidSyntax("Expected identifier in @keyframes".to_string()))
+            _ => {
+                return Err(ParseError::InvalidSyntax(
+                    "Expected identifier in @keyframes".to_string(),
+                ))
+            }
         };
 
         self.skip_whitespace();
         self.expect_token(&Token::LeftBrace)?;
-        
+
         let mut keyframes = Vec::new();
         while !self.check_token(&Token::RightBrace) && !self.is_at_end() {
             keyframes.push(self.parse_keyframe_rule()?);
         }
-        
+
         self.expect_token(&Token::RightBrace)?;
 
-        Ok(CSSRule::Keyframes(CSSKeyframesRule {
-            name,
-            keyframes,
-        }))
+        Ok(CSSRule::Keyframes(CSSKeyframesRule { name, keyframes }))
     }
 
     fn parse_keyframe_rule(&mut self) -> Result<CSSKeyframeRule> {
         self.skip_whitespace();
-        
+
         let offset = match self.current_token() {
             Some(Token::Percentage(p)) => {
                 let percentage = *p;
@@ -677,14 +690,18 @@ impl CSSParser {
                 self.advance();
                 KeyframeOffset::Keyword(keyword)
             }
-            _ => return Err(ParseError::InvalidSyntax("Expected percentage or keyword in keyframe".to_string()))
+            _ => {
+                return Err(ParseError::InvalidSyntax(
+                    "Expected percentage or keyword in keyframe".to_string(),
+                ))
+            }
         };
 
         self.skip_whitespace();
         self.expect_token(&Token::LeftBrace)?;
-        
+
         let declarations = self.parse_declarations_block()?;
-        
+
         self.expect_token(&Token::RightBrace)?;
 
         Ok(CSSKeyframeRule {
@@ -696,7 +713,7 @@ impl CSSParser {
     fn parse_page_rule(&mut self) -> Result<CSSRule> {
         self.advance();
         self.skip_whitespace();
-        
+
         let selector = if let Some(Token::Ident(s)) = self.current_token() {
             let selector = Some(s.clone());
             self.advance();
@@ -707,9 +724,9 @@ impl CSSParser {
 
         self.skip_whitespace();
         self.expect_token(&Token::LeftBrace)?;
-        
+
         let declarations = self.parse_declarations_block()?;
-        
+
         self.expect_token(&Token::RightBrace)?;
 
         Ok(CSSRule::Page(CSSPageRule {
@@ -721,19 +738,23 @@ impl CSSParser {
     fn parse_namespace_rule(&mut self) -> Result<CSSRule> {
         self.advance();
         self.skip_whitespace();
-        
+
         let (prefix, namespace_uri) = if let Some(Token::Ident(prefix)) = self.current_token() {
             let prefix = prefix.clone();
             self.advance();
             self.skip_whitespace();
-            
+
             match self.current_token() {
                 Some(Token::String(uri)) | Some(Token::Url(uri)) => {
                     let uri = uri.clone();
                     self.advance();
                     (Some(prefix), uri)
                 }
-                _ => return Err(ParseError::InvalidSyntax("Expected URI in @namespace".to_string()))
+                _ => {
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected URI in @namespace".to_string(),
+                    ))
+                }
             }
         } else {
             match self.current_token() {
@@ -742,7 +763,11 @@ impl CSSParser {
                     self.advance();
                     (None, uri)
                 }
-                _ => return Err(ParseError::InvalidSyntax("Expected URI in @namespace".to_string()))
+                _ => {
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected URI in @namespace".to_string(),
+                    ))
+                }
             }
         };
 
@@ -757,10 +782,10 @@ impl CSSParser {
     fn parse_supports_rule(&mut self) -> Result<CSSRule> {
         self.advance();
         self.skip_whitespace();
-        
+
         let mut condition = String::new();
         let mut paren_count = 0;
-        
+
         while !self.check_token(&Token::LeftBrace) && !self.is_at_end() {
             match self.current_token() {
                 Some(Token::LeftParen) => {
@@ -790,27 +815,24 @@ impl CSSParser {
 
         self.skip_whitespace();
         self.expect_token(&Token::LeftBrace)?;
-        
+
         let mut rules = Vec::new();
         while !self.check_token(&Token::RightBrace) && !self.is_at_end() {
             rules.push(self.parse_rule()?);
         }
-        
+
         self.expect_token(&Token::RightBrace)?;
 
-        Ok(CSSRule::Supports(CSSSupportsRule {
-            condition,
-            rules,
-        }))
+        Ok(CSSRule::Supports(CSSSupportsRule { condition, rules }))
     }
 
     fn parse_selectors(&mut self) -> Result<Vec<Selector>> {
         let mut selectors = Vec::new();
-        
+
         loop {
             self.skip_whitespace();
             selectors.push(self.parse_selector()?);
-            
+
             self.skip_whitespace();
             if self.consume_if_match(&Token::Comma) {
                 continue;
@@ -818,16 +840,17 @@ impl CSSParser {
                 break;
             }
         }
-        
+
         Ok(selectors)
     }
 
     fn parse_selector(&mut self) -> Result<Selector> {
         let mut selector_text = String::new();
-        
-        while !self.check_token(&Token::LeftBrace) && 
-              !self.check_token(&Token::Comma) && 
-              !self.is_at_end() {
+
+        while !self.check_token(&Token::LeftBrace)
+            && !self.check_token(&Token::Comma)
+            && !self.is_at_end()
+        {
             match self.current_token() {
                 Some(Token::Ident(s)) => selector_text.push_str(s),
                 Some(Token::Hash(s)) => {
@@ -885,20 +908,20 @@ impl CSSParser {
                 }
                 _ => {}
             }
-            
+
             self.advance();
         }
-        
+
         Selector::parse(selector_text.trim())
             .map_err(|e| ParseError::InvalidSelector(e.to_string()))
     }
 
     fn parse_declarations_block(&mut self) -> Result<SerializableDeclarations> {
         let mut properties = Vec::new();
-        
+
         while !self.check_token(&Token::RightBrace) && !self.is_at_end() {
             self.skip_whitespace();
-            
+
             if self.check_token(&Token::RightBrace) {
                 break;
             }
@@ -915,14 +938,14 @@ impl CSSParser {
 
     fn parse_declaration(&mut self) -> Result<(String, String, bool)> {
         self.skip_whitespace();
-        
+
         let property = match self.current_token() {
             Some(Token::Ident(prop)) => {
                 let property = prop.clone();
                 self.advance();
                 property
             }
-            _ => return Err(ParseError::InvalidSyntax("Expected property name".to_string()))
+            _ => return Err(ParseError::InvalidSyntax("Expected property name".to_string())),
         };
 
         self.skip_whitespace();
@@ -931,10 +954,11 @@ impl CSSParser {
 
         let mut value = String::new();
         let mut important = false;
-        
-        while !self.check_token(&Token::Semicolon) && 
-              !self.check_token(&Token::RightBrace) && 
-              !self.is_at_end() {
+
+        while !self.check_token(&Token::Semicolon)
+            && !self.check_token(&Token::RightBrace)
+            && !self.is_at_end()
+        {
             match self.current_token() {
                 Some(Token::Ident(s)) => {
                     if s == "important" && value.trim().ends_with('!') {
@@ -993,7 +1017,7 @@ impl CSSParser {
                     value.push_str(f);
                     value.push('(');
                     self.advance();
-                    
+
                     let mut paren_count = 1;
                     while paren_count > 0 && !self.is_at_end() {
                         match self.current_token() {
@@ -1026,7 +1050,7 @@ impl CSSParser {
                 }
                 _ => {}
             }
-            
+
             self.advance();
         }
 
@@ -1037,7 +1061,7 @@ impl CSSParser {
         let mut is_not = false;
         let mut is_only = false;
         let mut media_type = None;
-        let mut conditions = Vec::new();
+        let mut conditions = Vec::<MediaCondition>::new();
 
         self.skip_whitespace();
 
@@ -1057,17 +1081,17 @@ impl CSSParser {
             }
         }
 
+        // Consume media type if present (e.g., "screen", "print")
         if let Some(Token::Ident(type_name)) = self.current_token() {
-            if !type_name.starts_with('(') {
-                media_type = Some(type_name.clone());
-                self.advance();
-                self.skip_whitespace();
-            }
+            media_type = Some(type_name.clone());
+            self.advance();
+            self.skip_whitespace();
         }
 
+        // Parse feature conditions: (width >= 600px), (min-width: 600px), (color), etc.
         while self.check_token(&Token::LeftParen) && !self.is_at_end() {
             self.advance();
-            
+
             let mut feature = String::new();
             let mut value = None;
             let mut operator = None;
@@ -1076,23 +1100,41 @@ impl CSSParser {
                 match self.current_token() {
                     Some(Token::Ident(s)) => {
                         if feature.is_empty() {
+                            // First identifier inside the parens is the feature name.
                             feature = s.clone();
-                        } else if s == "min" && feature.is_empty() {
-                            operator = Some(MediaOperator::Min);
-                        } else if s == "max" && feature.is_empty() {
-                            operator = Some(MediaOperator::Max);
+
+                            // Handle min-/max- prefix form (e.g., min-width, max-height).
+                            if feature.starts_with("min-") {
+                                operator = Some(MediaOperator::Min);
+                                feature = feature.trim_start_matches("min-").to_string();
+                            } else if feature.starts_with("max-") {
+                                operator = Some(MediaOperator::Max);
+                                feature = feature.trim_start_matches("max-").to_string();
+                            }
                         }
                     }
                     Some(Token::Colon) => {
+                        // Value part begins after colon.
                         self.advance();
                         self.skip_whitespace();
-                        
+
                         let mut val = String::new();
                         while !self.check_token(&Token::RightParen) && !self.is_at_end() {
                             match self.current_token() {
                                 Some(Token::Number(n)) => val.push_str(&n.to_string()),
-                                Some(Token::Dimension(n, unit)) => val.push_str(&format!("{}{}", n, unit)),
+                                Some(Token::Dimension(n, unit)) => {
+                                    val.push_str(&format!("{}{}", n, unit))
+                                }
+                                Some(Token::Percentage(p)) => {
+                                    val.push_str(&format!("{}%", p))
+                                }
                                 Some(Token::Ident(s)) => val.push_str(s),
+                                Some(Token::Delim(c)) => val.push(*c),
+                                Some(Token::Whitespace) => {
+                                    if !val.ends_with(' ') && !val.is_empty() {
+                                        val.push(' ');
+                                    }
+                                }
                                 _ => {}
                             }
                             self.advance();
@@ -1173,7 +1215,11 @@ impl CSSParser {
             self.advance();
             Ok(())
         } else {
-            Err(ParseError::UnexpectedToken(format!("Expected {:?}, found {:?}", expected, self.current_token())))
+            Err(ParseError::UnexpectedToken(format!(
+                "Expected {:?}, found {:?}",
+                expected,
+                self.current_token()
+            )))
         }
     }
 
@@ -1189,7 +1235,7 @@ impl CSSParser {
 
     fn recover_from_error(&mut self) {
         let mut brace_count = 0;
-        
+
         while !self.is_at_end() {
             match self.current_token() {
                 Some(Token::LeftBrace) => brace_count += 1,

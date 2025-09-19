@@ -65,8 +65,8 @@ impl CoreEngine {
         let mut doc_guard = self.dom.write().await;
         *doc_guard = Document::parse(&html)
             .map_err(|e| CoreError::ParseError(e.to_string()))?;
-        self.style_engine.compute_styles(&*doc_guard);
-        self.layout_engine.compute_layout(&*doc_guard, &self.style_engine);
+        self.style_engine.compute_styles(&doc_guard);
+        self.layout_engine.compute_layout(&doc_guard, &self.style_engine);
         Ok(())
     }
 
@@ -83,11 +83,11 @@ impl CoreEngine {
     let mut layout_tree = LayoutTree::new();
     layout_tree.from_layout_box(
         root_node_id,
-        layout_box.clone(),
+        *layout_box,
         ElementType::Block // or ElementType::Div, ElementType::Document, etc.
     );
     
-    self.renderer.render(&*doc_guard, &layout_tree).await?;
+    self.renderer.render(&doc_guard, &layout_tree).await?;
     Ok(())
 }
 }

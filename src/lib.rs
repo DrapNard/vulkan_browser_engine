@@ -50,6 +50,9 @@ pub type Result<T> = std::result::Result<T, BrowserError>;
 
 #[derive(Debug, Clone)]
 pub struct BrowserConfig {
+    pub allow_data_urls: bool,
+    pub max_data_url_bytes: usize,
+    pub allowed_data_mime_prefixes: Vec<String>,
     pub enable_jit: bool,
     pub enable_gpu_acceleration: bool,
     pub enable_sandbox: bool,
@@ -74,6 +77,16 @@ impl Default for BrowserConfig {
             enable_chrome_apis: true,
             max_memory_mb: 2048,
             max_processes: 16,
+            allow_data_urls: false,
+max_data_url_bytes: 256 * 1024, // 256 KiB cap
+allowed_data_mime_prefixes: vec![
+    "text/html".to_string(),
+    "text/plain".to_string(),
+    "image/".to_string(),
+    "font/".to_string(),
+    "application/javascript".to_string(),
+    "text/css".to_string(),
+],
             user_agent: "VulkanBrowser/1.0 (Vulkan; JIT)".to_string(),
             viewport_width: 1920,
             viewport_height: 1080,
@@ -247,7 +260,7 @@ impl BrowserEngine {
         
         // Parse HTML and update document
         {
-            let mut document = self.document.write().await;
+            let document = self.document.write().await;
             document.parse_html(&content)
                 .map_err(|e| BrowserError::Document(e.to_string()))?;
             document.set_url(url.to_string()); // Fixed: convert &str to String
@@ -256,24 +269,24 @@ impl BrowserEngine {
         let document_guard = self.document.read().await;
         
         // Compute styles
-        self.style_engine.compute_styles(&*document_guard)
+        self.style_engine.compute_styles(&document_guard)
             .map_err(|e| BrowserError::Style(e.to_string()))?;
 
         // Compute layout
         {
-            let mut layout_engine = self.layout_engine.write().await;
-            layout_engine.compute_layout(&*document_guard, &self.style_engine)
+            let layout_engine = self.layout_engine.write().await;
+            layout_engine.compute_layout(&document_guard, &self.style_engine)
                 .await
                 .map_err(|e| BrowserError::Layout(e.to_string()))?;
         }
 
         // Execute JavaScript
         {
-            let mut js_runtime = self.js_runtime.write().await;
-            js_runtime.inject_document_api(&*document_guard).await?;
+            let js_runtime = self.js_runtime.write().await;
+            js_runtime.inject_document_api(&document_guard).await?;
             
             // Execute inline scripts with error handling
-            if let Err(e) = js_runtime.execute_inline_scripts(&*document_guard).await {
+            if let Err(e) = js_runtime.execute_inline_scripts(&document_guard).await {
                 self.emit_event(BrowserEvent::JavaScriptError {
                     message: e.to_string(),
                     line: 0,
@@ -287,7 +300,7 @@ impl BrowserEngine {
         let layout_tree = self.create_layout_tree().await?;
         {
             let mut renderer = self.renderer.write().await;
-            renderer.render(&*document_guard, &layout_tree).await?;
+            renderer.render(&document_guard, &layout_tree).await?;
         }
 
         let load_time = start_time.elapsed().as_millis() as u64;
@@ -368,7 +381,7 @@ impl BrowserEngine {
 
         // Update layout engine viewport
         {
-            let mut layout_engine = self.layout_engine.write().await;
+            let layout_engine = self.layout_engine.write().await;
             layout_engine.resize_viewport(width, height)
                 .await
                 .map_err(|e| BrowserError::Layout(e.to_string()))?;
@@ -377,8 +390,8 @@ impl BrowserEngine {
         // Recompute layout with new viewport
         let document_guard = self.document.read().await;
         {
-            let mut layout_engine = self.layout_engine.write().await;
-            layout_engine.compute_layout(&*document_guard, &self.style_engine)
+            let layout_engine = self.layout_engine.write().await;
+            layout_engine.compute_layout(&document_guard, &self.style_engine)
                 .await
                 .map_err(|e| BrowserError::Layout(e.to_string()))?;
         }
@@ -387,7 +400,7 @@ impl BrowserEngine {
         let layout_tree = self.create_layout_tree().await?;
         {
             let mut renderer = self.renderer.write().await;
-            renderer.render(&*document_guard, &layout_tree).await?;
+            renderer.render(&document_guard, &layout_tree).await?;
         }
         
         // Note: We don't call handle_input_event here to avoid recursion
@@ -618,6 +631,11 @@ impl BrowserEngine {
         // Uncomment when renderer shutdown is implemented
         // self.renderer.write().await.shutdown().await?;
 
+        // First shutdown JS runtime to drop isolates and contexts
+        {
+            let rt = self.js_runtime.read().await;
+            rt.shutdown().await.map_err(|e| BrowserError::Platform(e.to_string()))?;
+        }
         // Dispose V8 global state - this should be done last and only once per process
         crate::js_engine::v8_binding::V8Runtime::dispose_v8();
 

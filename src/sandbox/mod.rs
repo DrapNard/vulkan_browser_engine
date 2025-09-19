@@ -124,7 +124,7 @@ impl SandboxManager {
         let mut process = {
             let mut processes = self.processes.write().await;
             processes.remove(&process_id)
-                .ok_or_else(|| SandboxError::ProcessNotFound(process_id))?
+                .ok_or(SandboxError::ProcessNotFound(process_id))?
         };
 
         match process.terminate().await {

@@ -46,6 +46,7 @@ enum WorkerState {
     Redundant,
 }
 
+#[derive(Default)]
 struct EventHandlerRegistry {
     install: bool,
     activate: bool,
@@ -399,7 +400,7 @@ impl ServiceWorkerRuntime {
             .await
             .map_err(|_| ServiceWorkerError::ExecutionError("Script execution timeout".to_string()))?
             .map_err(|e| ServiceWorkerError::ExecutionError(e.to_string()))
-            .map(|result| Some(result))
+            .map(Some)
     }
 
     async fn extract_event_handlers(&self, js_engine: &mut JsEngine) -> Result<EventHandlerRegistry, ServiceWorkerError> {
@@ -654,16 +655,3 @@ impl Default for ServiceWorkerConfig {
     }
 }
 
-impl Default for EventHandlerRegistry {
-    fn default() -> Self {
-        Self {
-            install: false,
-            activate: false,
-            fetch: false,
-            message: false,
-            sync: false,
-            push: false,
-            notificationclick: false,
-        }
-    }
-}

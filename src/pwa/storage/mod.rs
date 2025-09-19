@@ -139,7 +139,7 @@ impl StorageManager {
     }
 
     pub async fn set_local_storage(&mut self, origin: &str, key: &str, value: &str) -> Result<(), StorageError> {
-        let storage = self.local_storage.entry(origin.to_string()).or_insert_with(HashMap::new);
+        let storage = self.local_storage.entry(origin.to_string()).or_default();
         storage.insert(key.to_string(), value.to_string());
         self.persist_local_storage(origin).await?;
         Ok(())
@@ -168,7 +168,7 @@ impl StorageManager {
     }
 
     pub async fn set_session_storage(&mut self, origin: &str, key: &str, value: &str) -> Result<(), StorageError> {
-        let storage = self.session_storage.entry(origin.to_string()).or_insert_with(HashMap::new);
+        let storage = self.session_storage.entry(origin.to_string()).or_default();
         storage.insert(key.to_string(), value.to_string());
         Ok(())
     }

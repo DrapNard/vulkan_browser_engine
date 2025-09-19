@@ -91,17 +91,15 @@ impl Texture {
                 })?;
         }
 
-        let image_view = Self::create_image_view(&device, image, format, mip_levels).map_err(|e| {
+        let image_view = Self::create_image_view(&device, image, format, mip_levels).inspect_err(|_e| {
             unsafe { device.destroy_image(image, None) };
-            e
         })?;
 
-        let sampler = Self::create_sampler(&device, mip_levels).map_err(|e| {
+        let sampler = Self::create_sampler(&device, mip_levels).inspect_err(|_e| {
             unsafe { 
                 device.destroy_image_view(image_view, None);
                 device.destroy_image(image, None);
             };
-            e
         })?;
 
         Ok(Self {

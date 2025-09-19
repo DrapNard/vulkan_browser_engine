@@ -27,10 +27,12 @@ pub struct Manifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum DisplayMode {
     #[serde(rename = "fullscreen")]
     Fullscreen,
     #[serde(rename = "standalone")]
+    #[default]
     Standalone,
     #[serde(rename = "minimal-ui")]
     MinimalUi,
@@ -78,8 +80,10 @@ pub struct Icon {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum IconPurpose {
     #[serde(rename = "any")]
+    #[default]
     Any,
     #[serde(rename = "maskable")]
     Maskable,
@@ -146,17 +150,7 @@ impl Default for Manifest {
     }
 }
 
-impl Default for DisplayMode {
-    fn default() -> Self {
-        DisplayMode::Standalone
-    }
-}
 
-impl Default for IconPurpose {
-    fn default() -> Self {
-        IconPurpose::Any
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {

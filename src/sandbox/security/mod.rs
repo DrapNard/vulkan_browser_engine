@@ -477,7 +477,7 @@ impl AnomalyDetector {
 
     async fn calculate_anomaly_score(&self, event: &SecurityEvent) -> f64 {
         self.baseline_models.get(&event.source_process)
-            .map(|baseline| Self::compare_to_baseline(baseline))
+            .map(Self::compare_to_baseline)
             .unwrap_or(0.0)
     }
 

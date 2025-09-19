@@ -156,6 +156,12 @@ pub struct ShaderCompiler {
     debug_info_enabled: bool,
 }
 
+impl Default for ShaderCompiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShaderCompiler {
     pub fn new() -> Self {
         Self {
@@ -539,12 +545,12 @@ impl ShaderManager {
         let vertex_stage_info = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::VERTEX)
             .module(vertex_shader.module)
-            .name(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0") });
+            .name(unsafe { c"main" });
 
         let fragment_stage_info = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .module(fragment_shader.module)
-            .name(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0") });
+            .name(unsafe { c"main" });
 
         let shader_stages = [*vertex_stage_info, *fragment_stage_info];
 

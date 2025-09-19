@@ -448,8 +448,8 @@ impl VulkanDevice {
             ash::extensions::khr::Synchronization2::name(),
             ash::extensions::khr::PushDescriptor::name(),
             // Use raw extension names for extensions not available as separate structs
-            unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_EXT_descriptor_indexing\0") },
-            unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_EXT_shader_viewport_index_layer\0") },
+            unsafe { c"VK_EXT_descriptor_indexing" },
+            unsafe { c"VK_EXT_shader_viewport_index_layer" },
         ]
     }
 
@@ -516,13 +516,8 @@ impl VulkanDevice {
         type_filter: u32, 
         properties: vk::MemoryPropertyFlags
     ) -> Option<u32> {
-        for i in 0..self.memory_properties.memory_type_count {
-            if (type_filter & (1 << i)) != 0 
-                && self.memory_properties.memory_types[i as usize].property_flags.contains(properties) {
-                return Some(i);
-            }
-        }
-        None
+        (0..self.memory_properties.memory_type_count).find(|&i| (type_filter & (1 << i)) != 0 
+                && self.memory_properties.memory_types[i as usize].property_flags.contains(properties))
     }
 
     pub async fn wait_idle(&self) -> Result<()> {

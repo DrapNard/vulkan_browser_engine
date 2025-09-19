@@ -207,7 +207,7 @@ impl ImportMap {
     pub fn add_scoped_import(&mut self, scope: String, specifier: String, url: String) {
         self.scopes
             .entry(scope)
-            .or_insert_with(std::collections::HashMap::new)
+            .or_default()
             .insert(specifier, url);
     }
 }

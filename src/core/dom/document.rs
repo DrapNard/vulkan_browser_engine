@@ -25,6 +25,12 @@ pub type Result<T> = std::result::Result<T, DocumentError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub u64);
 
+impl Default for NodeId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NodeId {
     pub fn new() -> Self {
         Self(fastrand::u64(..))
@@ -217,6 +223,12 @@ pub struct QueryCache {
     cache_version: Arc<RwLock<u64>>,
 }
 
+impl Default for QueryCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueryCache {
     pub fn new() -> Self {
         Self {
@@ -317,6 +329,12 @@ pub struct Document {
     query_cache: Arc<QueryCache>,
     mutation_observers: Arc<RwLock<Vec<MutationObserver>>>,
     mutation_records: Arc<RwLock<Vec<MutationRecord>>>,
+}
+
+impl Default for Document {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Document {

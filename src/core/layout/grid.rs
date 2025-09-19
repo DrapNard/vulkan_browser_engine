@@ -23,22 +23,19 @@ pub enum GridError {
 pub type Result<T> = std::result::Result<T, GridError>;
 
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub enum TrackSize {
     Length(f32),
     Percentage(f32),
     Fr(f32),
     MinContent,
     MaxContent,
+    #[default]
     Auto,
     MinMax(Box<TrackSize>, Box<TrackSize>),
     FitContent(Box<TrackSize>),
 }
 
-impl Default for TrackSize {
-    fn default() -> Self {
-        TrackSize::Auto
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct GridTrack {
@@ -68,17 +65,14 @@ impl Default for GridTrack {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum GridLine {
     Line(i32),
     Span(u32),
+    #[default]
     Auto,
 }
 
-impl Default for GridLine {
-    fn default() -> Self {
-        GridLine::Auto
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct GridArea {
@@ -127,35 +121,31 @@ impl ResolvedGridArea {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum JustifyItems {
     Start,
     End,
     Center,
+    #[default]
     Stretch,
 }
 
-impl Default for JustifyItems {
-    fn default() -> Self {
-        JustifyItems::Stretch
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AlignItems {
     Start,
     End,
     Center,
+    #[default]
     Stretch,
 }
 
-impl Default for AlignItems {
-    fn default() -> Self {
-        AlignItems::Stretch
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum JustifyContent {
+    #[default]
     Start,
     End,
     Center,
@@ -165,14 +155,11 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-impl Default for JustifyContent {
-    fn default() -> Self {
-        JustifyContent::Start
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AlignContent {
+    #[default]
     Start,
     End,
     Center,
@@ -182,11 +169,6 @@ pub enum AlignContent {
     SpaceEvenly,
 }
 
-impl Default for AlignContent {
-    fn default() -> Self {
-        AlignContent::Start
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct GridContainer {
@@ -205,16 +187,13 @@ pub struct GridContainer {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum GridAutoFlow {
+    #[default]
     Row,
     Column,
 }
 
-impl Default for GridAutoFlow {
-    fn default() -> Self {
-        GridAutoFlow::Row
-    }
-}
 
 impl Default for GridContainer {
     fn default() -> Self {
@@ -237,6 +216,12 @@ impl Default for GridContainer {
 
 pub struct GridLayout {
     cache: Arc<dashmap::DashMap<NodeId, GridContainer>>,
+}
+
+impl Default for GridLayout {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GridLayout {

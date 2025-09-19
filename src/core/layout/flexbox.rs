@@ -20,34 +20,30 @@ pub enum FlexboxError {
 pub type Result<T> = std::result::Result<T, FlexboxError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum FlexDirection {
+    #[default]
     Row,
     RowReverse,
     Column,
     ColumnReverse,
 }
 
-impl Default for FlexDirection {
-    fn default() -> Self {
-        FlexDirection::Row
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum FlexWrap {
+    #[default]
     NoWrap,
     Wrap,
     WrapReverse,
 }
 
-impl Default for FlexWrap {
-    fn default() -> Self {
-        FlexWrap::NoWrap
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum JustifyContent {
+    #[default]
     FlexStart,
     FlexEnd,
     Center,
@@ -56,28 +52,21 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-impl Default for JustifyContent {
-    fn default() -> Self {
-        JustifyContent::FlexStart
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AlignItems {
     FlexStart,
     FlexEnd,
     Center,
     Baseline,
+    #[default]
     Stretch,
 }
 
-impl Default for AlignItems {
-    fn default() -> Self {
-        AlignItems::Stretch
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AlignContent {
     FlexStart,
     FlexEnd,
@@ -85,17 +74,15 @@ pub enum AlignContent {
     SpaceBetween,
     SpaceAround,
     SpaceEvenly,
+    #[default]
     Stretch,
 }
 
-impl Default for AlignContent {
-    fn default() -> Self {
-        AlignContent::Stretch
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AlignSelf {
+    #[default]
     Auto,
     FlexStart,
     FlexEnd,
@@ -104,11 +91,6 @@ pub enum AlignSelf {
     Stretch,
 }
 
-impl Default for AlignSelf {
-    fn default() -> Self {
-        AlignSelf::Auto
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct FlexContainer {
@@ -190,6 +172,12 @@ pub struct FlexLine {
     pub baseline: f32,
 }
 
+impl Default for FlexLine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FlexLine {
     pub fn new() -> Self {
         Self {
@@ -203,6 +191,12 @@ impl FlexLine {
 
 pub struct FlexboxLayout {
     cache: Arc<dashmap::DashMap<NodeId, FlexContainer>>,
+}
+
+impl Default for FlexboxLayout {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FlexboxLayout {

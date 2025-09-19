@@ -34,6 +34,12 @@ pub struct AttributeMap {
     namespace_map: HashMap<String, String>,
 }
 
+impl Default for AttributeMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AttributeMap {
     pub fn new() -> Self {
         Self {
@@ -106,6 +112,12 @@ pub struct ComputedStyle {
     inherited_properties: SmallVec<[String; 8]>,
     is_dirty: bool,
     parent_style: Option<Arc<ComputedStyle>>,
+}
+
+impl Default for ComputedStyle {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ComputedStyle {
@@ -540,7 +552,7 @@ impl Node {
     {
         self.event_listeners
             .entry(event)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(Arc::new(listener));
     }
 
@@ -693,7 +705,8 @@ impl Node {
     }
 
     pub fn clone_node(&self, deep: bool) -> Self {
-        let cloned = Self {
+        
+        Self {
             node_id: NodeId::new(),
             node_type: self.node_type,
             tag_name: self.tag_name.clone(),
@@ -710,8 +723,7 @@ impl Node {
             is_connected: false,
             shadow_root: None,
             assigned_slot: None,
-        };
-        cloned
+        }
     }
 
     pub fn get_memory_usage(&self) -> usize {

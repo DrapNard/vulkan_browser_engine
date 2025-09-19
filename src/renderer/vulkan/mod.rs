@@ -255,9 +255,9 @@ impl VulkanRenderer {
 
     fn create_instance(entry: &Entry) -> Result<Instance> {
         let app_info = vk::ApplicationInfo::builder()
-            .application_name(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"Vulkan Browser\0") })
+            .application_name(unsafe { c"Vulkan Browser" })
             .application_version(vk::make_api_version(0, 1, 0, 0))
-            .engine_name(unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(b"VulkanBrowserEngine\0") })
+            .engine_name(unsafe { c"VulkanBrowserEngine" })
             .engine_version(vk::make_api_version(0, 1, 0, 0))
             .api_version(vk::API_VERSION_1_3);
 
@@ -270,7 +270,7 @@ impl VulkanRenderer {
         if cfg!(debug_assertions) {
             extension_names.push(ash::extensions::ext::DebugUtils::name().as_ptr());
             layer_names.push(unsafe { 
-                std::ffi::CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0").as_ptr() 
+                c"VK_LAYER_KHRONOS_validation".as_ptr() 
             });
         }
 

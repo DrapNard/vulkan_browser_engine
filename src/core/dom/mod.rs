@@ -75,6 +75,12 @@ impl Default for FeatureSupport {
     }
 }
 
+impl Default for DOMImplementation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DOMImplementation {
     pub fn new() -> Self {
         Self {
@@ -353,6 +359,12 @@ pub struct DOMRange {
     end_offset: u32,
     collapsed: bool,
     common_ancestor_container: Option<NodeId>,
+}
+
+impl Default for DOMRange {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DOMRange {

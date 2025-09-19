@@ -79,11 +79,11 @@ impl GarbageCollector {
         for root in roots {
             if !marker.marked.contains(&root) {
                 marker.mark_stack.push(root);
-                self.mark_phase(&mut marker, &*heap).await;
+                self.mark_phase(&mut marker, &heap).await;
             }
         }
 
-        let freed_bytes = self.sweep_phase(&mut marker, &mut *heap).await;
+        let freed_bytes = self.sweep_phase(&mut marker, &mut heap).await;
         
         self.allocation_count = self.allocation_count.saturating_sub(freed_bytes);
         

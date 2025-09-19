@@ -223,7 +223,7 @@ impl TextRenderer {
             }
 
             let atlas_coords = self.font_atlas.get_glyph_coords(glyph.character)
-                .ok_or_else(|| TextError::GlyphNotFound(glyph.character))?;
+                .ok_or(TextError::GlyphNotFound(glyph.character))?;
 
             let quad_vertices = [
                 TextVertex {
@@ -255,7 +255,7 @@ impl TextRenderer {
     }
 
     async fn update_vertex_buffer(&mut self, vertices: &[TextVertex]) -> Result<(), TextError> {
-        let buffer_size = (vertices.len() * std::mem::size_of::<TextVertex>()) as u64;
+        let buffer_size = std::mem::size_of_val(vertices) as u64;
 
         if self.vertex_buffer.is_none() || self.vertex_buffer.as_ref().unwrap().size() < buffer_size {
             self.vertex_buffer = Some(

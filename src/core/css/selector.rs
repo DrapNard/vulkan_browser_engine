@@ -29,6 +29,12 @@ pub struct Specificity {
     pub d: u32,
 }
 
+impl Default for Specificity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Specificity {
     pub fn new() -> Self { Self { a: 0, b: 0, c: 0, d: 0 } }
     pub fn with_inline() -> Self { Self { a: 1, b: 0, c: 0, d: 0 } }
@@ -193,6 +199,12 @@ pub struct SimpleSelector {
     pub pseudo_element: Option<PseudoElement>,
 }
 
+impl Default for SimpleSelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimpleSelector {
     pub fn new() -> Self {
         Self {
@@ -248,6 +260,12 @@ impl ComplexSelector {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Selector {
     pub complex_selectors: SmallVec<[ComplexSelector; 2]>,
+}
+
+impl Default for Selector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Selector {
@@ -536,6 +554,12 @@ pub struct SelectorMatcher {
     match_cache: DashMap<(String, NodeId), bool>,
 }
 
+impl Default for SelectorMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SelectorMatcher {
     pub fn new() -> Self {
         Self {
@@ -741,20 +765,20 @@ impl SelectorMatcher {
             }
             PseudoClass::FirstChild => {
                 document.get_parent(node_id)
-                    .map_or(false, |pid| document.get_children(pid).first() == Some(&node_id))
+                    .is_some_and(|pid| document.get_children(pid).first() == Some(&node_id))
             }
             PseudoClass::LastChild => {
                 document.get_parent(node_id)
-                    .map_or(false, |pid| document.get_children(pid).last() == Some(&node_id))
+                    .is_some_and(|pid| document.get_children(pid).last() == Some(&node_id))
             }
             PseudoClass::OnlyChild => {
-                document.get_parent(node_id).map_or(false, |pid| {
+                document.get_parent(node_id).is_some_and(|pid| {
                     let sib = document.get_children(pid);
                     sib.len() == 1 && sib[0] == node_id
                 })
             }
             PseudoClass::NthChild(pattern) => {
-                document.get_parent(node_id).map_or(false, |pid| {
+                document.get_parent(node_id).is_some_and(|pid| {
                     document.get_children(pid)
                         .iter()
                         .position(|&id| id == node_id)
@@ -763,7 +787,7 @@ impl SelectorMatcher {
                 })
             }
             PseudoClass::NthLastChild(pattern) => {
-                document.get_parent(node_id).map_or(false, |pid| {
+                document.get_parent(node_id).is_some_and(|pid| {
                     let sib = document.get_children(pid);
                     sib.iter()
                         .position(|&id| id == node_id)
@@ -793,22 +817,22 @@ impl SelectorMatcher {
 
     fn matches_child(&self, selector: &ComplexSelector, node_id: NodeId, document: &Document) -> bool {
         document.get_parent(node_id)
-            .map_or(false, |pid| self.matches_complex_selector(selector, pid, document))
+            .is_some_and(|pid| self.matches_complex_selector(selector, pid, document))
     }
 
     fn matches_next_sibling(&self, selector: &ComplexSelector, node_id: NodeId, document: &Document) -> bool {
-        document.get_parent(node_id).map_or(false, |pid| {
+        document.get_parent(node_id).is_some_and(|pid| {
             let sib = document.get_children(pid);
-            sib.iter().position(|&id| id == node_id).map_or(false, |i| {
+            sib.iter().position(|&id| id == node_id).is_some_and(|i| {
                 i > 0 && self.matches_complex_selector(selector, sib[i-1], document)
             })
         })
     }
 
     fn matches_subsequent_sibling(&self, selector: &ComplexSelector, node_id: NodeId, document: &Document) -> bool {
-        document.get_parent(node_id).map_or(false, |pid| {
+        document.get_parent(node_id).is_some_and(|pid| {
             let sib = document.get_children(pid);
-            sib.iter().position(|&id| id == node_id).map_or(false, |i| {
+            sib.iter().position(|&id| id == node_id).is_some_and(|i| {
                 sib.iter().take(i).any(|&sid| self.matches_complex_selector(selector, sid, document))
             })
         })
@@ -835,6 +859,12 @@ impl SelectorMatcher {
 pub struct SelectorEngine {
     matcher: Arc<SelectorMatcher>,
     cached_selectors: DashMap<String, Selector>,
+}
+
+impl Default for SelectorEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SelectorEngine {

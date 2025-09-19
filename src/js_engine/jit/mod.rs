@@ -156,6 +156,12 @@ pub struct ProfilerData {
     pub deoptimization_points: Arc<DashMap<String, Vec<usize>>>,
 }
 
+impl Default for ProfilerData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProfilerData {
     pub fn new() -> Self {
         Self {
@@ -291,7 +297,7 @@ impl JITCompiler {
             context.func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature.clone());
 
             {
-                let builder = FunctionBuilder::new(&mut context.func, &mut *builder_context);
+                let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
                 self.compile_function_body(builder, js_function)?;
             }
 
@@ -374,7 +380,7 @@ impl JITCompiler {
         context.func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature);
 
         {
-            let mut builder = FunctionBuilder::new(&mut context.func, &mut *builder_context);
+            let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
             
             let entry_block = builder.create_block();
             builder.append_block_params_for_function_params(entry_block);
@@ -393,7 +399,7 @@ impl JITCompiler {
         module.clear_context(&mut context);
 
         self.type_specializations.entry(function_name.to_string())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(specialization_key, func_id);
 
         Ok(func_id)

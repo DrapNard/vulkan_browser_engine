@@ -31,6 +31,12 @@ pub struct ModuleCache {
     ttl: Duration,
 }
 
+impl Default for ModuleCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModuleCache {
     pub fn new() -> Self {
         Self {
@@ -199,10 +205,6 @@ pub struct JSRuntime {
 
 impl JSRuntime {
     pub async fn new(config: &BrowserConfig) -> Result<Self> {
-        let v8_platform = v8::new_default_platform(0, false).make_shared();
-        v8::V8::initialize_platform(v8_platform);
-        v8::V8::initialize();
-
         let v8_runtime = V8Runtime::new()
             .map_err(|e| JSError::RuntimeInit(format!("V8Runtime creation failed: {}", e)))?;
 
@@ -590,10 +592,6 @@ impl JSRuntime {
 
         self.execution_contexts.clear();
         self.script_cache.clear();
-
-        unsafe {
-            v8::V8::dispose();
-        }
 
         Ok(())
     }
