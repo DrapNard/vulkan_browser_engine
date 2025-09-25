@@ -504,12 +504,12 @@ impl Document {
 
     fn execute_css_selector(&self, selector: &str) -> Result<Vec<NodeId>> {
         let mut result = Vec::new();
-        if selector.starts_with('#') {
-            if let Some(id) = self.get_element_by_id(&selector[1..]) {
+        if let Some(id_part) = selector.strip_prefix('#') {
+            if let Some(id) = self.get_element_by_id(id_part) {
                 result.push(id);
             }
-        } else if selector.starts_with('.') {
-            result = self.get_elements_by_class_name(&selector[1..]);
+        } else if let Some(class_part) = selector.strip_prefix('.') {
+            result = self.get_elements_by_class_name(class_part);
         } else if !selector.contains(' ') && !selector.contains('.') && !selector.contains('#') {
             result = self.get_elements_by_tag_name(selector);
         } else {
@@ -635,12 +635,14 @@ impl Document {
 }
 
 struct HTMLParser {
-    current_node: Option<NodeId>,
+    _current_node: Option<NodeId>,
 }
 
 impl HTMLParser {
     fn new() -> Self {
-        Self { current_node: None }
+        Self {
+            _current_node: None,
+        }
     }
 
     fn parse(&self, _html: &str, _root_id: NodeId, _document: &Document) -> Result<()> {

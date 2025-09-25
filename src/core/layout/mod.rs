@@ -105,7 +105,7 @@ impl LayoutManager {
             Ok(result) => {
                 result.map_err(LayoutManagerError::from)?;
 
-                start_time.elapsed();
+                let _elapsed = start_time.elapsed();
                 self.update_performance_metrics().await;
 
                 Ok(())
@@ -204,10 +204,8 @@ pub mod utils {
     pub fn calculate_intrinsic_width(node_id: NodeId, style_engine: &StyleEngine) -> f32 {
         // Simplified intrinsic width calculation
         if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-            if let Ok(width) = computed_styles.get_computed_value("width") {
-                if let ComputedValue::Length(v) = width {
-                    return v;
-                }
+            if let Ok(ComputedValue::Length(v)) = computed_styles.get_computed_value("width") {
+                return v;
             }
         }
         0.0
@@ -216,10 +214,8 @@ pub mod utils {
     pub fn calculate_intrinsic_height(node_id: NodeId, style_engine: &StyleEngine) -> f32 {
         // Simplified intrinsic height calculation
         if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-            if let Ok(height) = computed_styles.get_computed_value("height") {
-                if let ComputedValue::Length(v) = height {
-                    return v;
-                }
+            if let Ok(ComputedValue::Length(v)) = computed_styles.get_computed_value("height") {
+                return v;
             }
         }
         0.0

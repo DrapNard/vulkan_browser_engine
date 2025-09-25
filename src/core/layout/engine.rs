@@ -2,14 +2,13 @@ use async_recursion::async_recursion;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rayon::prelude::*;
-use smallvec::SmallVec;
 use std::sync::Arc;
 use thiserror::Error;
 
 use super::{flexbox::FlexboxLayout, grid::GridLayout};
 use crate::core::{
     css::{ComputedStyles, ComputedValue, StyleEngine},
-    dom::{DisplayType, Document, Node, NodeId},
+    dom::{DisplayType, Document, NodeId},
 };
 
 #[derive(Error, Debug)]
@@ -75,47 +74,36 @@ impl LayoutBox {
     pub fn padding_box_x(&self) -> f32 {
         self.content_x - self.padding_left
     }
-
     pub fn padding_box_y(&self) -> f32 {
         self.content_y - self.padding_top
     }
-
     pub fn padding_box_width(&self) -> f32 {
         self.content_width + self.padding_left + self.padding_right
     }
-
     pub fn padding_box_height(&self) -> f32 {
         self.content_height + self.padding_top + self.padding_bottom
     }
-
     pub fn border_box_x(&self) -> f32 {
         self.padding_box_x() - self.border_left
     }
-
     pub fn border_box_y(&self) -> f32 {
         self.padding_box_y() - self.border_top
     }
-
     pub fn border_box_width(&self) -> f32 {
         self.padding_box_width() + self.border_left + self.border_right
     }
-
     pub fn border_box_height(&self) -> f32 {
         self.padding_box_height() + self.border_top + self.border_bottom
     }
-
     pub fn margin_box_x(&self) -> f32 {
         self.border_box_x() - self.margin_left
     }
-
     pub fn margin_box_y(&self) -> f32 {
         self.border_box_y() - self.margin_top
     }
-
     pub fn margin_box_width(&self) -> f32 {
         self.border_box_width() + self.margin_left + self.margin_right
     }
-
     pub fn margin_box_height(&self) -> f32 {
         self.border_box_height() + self.margin_top + self.margin_bottom
     }
@@ -125,7 +113,6 @@ impl LayoutBox {
         let by = self.border_box_y();
         let bw = self.border_box_width();
         let bh = self.border_box_height();
-
         x >= bx && x <= bx + bw && y >= by && y <= by + bh
     }
 
@@ -195,7 +182,6 @@ pub struct LayoutCache {
     constraints: LayoutConstraints,
     result: LayoutResult,
     generation: u64,
-    dependencies: SmallVec<[NodeId; 4]>,
 }
 
 pub struct LayoutEngine {
@@ -231,7 +217,7 @@ impl LayoutEngine {
             layout_generation: Arc::new(RwLock::new(0)),
             flexbox_layout: Arc::new(FlexboxLayout::new()),
             grid_layout: Arc::new(GridLayout::new()),
-            parallel_threshold: 100, // Use parallel layout for nodes with 100+ children
+            parallel_threshold: 100, // parallelize when a node has 100+ children
             performance_metrics: Arc::new(RwLock::new(LayoutMetrics::default())),
         }
     }
@@ -243,16 +229,22 @@ impl LayoutEngine {
     ) -> Result<()> {
         let start_time = std::time::Instant::now();
 
+        // Ensure no locks are held across await
         self.process_invalidation_queue().await;
 
-        let mut generation = self.layout_generation.write();
-        *generation += 1;
-        let current_generation = *generation;
-        drop(generation);
+        let current_generation = {
+            let mut generation = self.layout_generation.write();
+            *generation += 1;
+            *generation
+        };
 
         if let Some(root_id) = document.get_root_node() {
-            let viewport_width = *self.viewport_width.read();
-            let viewport_height = *self.viewport_height.read();
+            let (viewport_width, viewport_height) = {
+                // Read both under the same scope and drop before awaiting
+                let vw = *self.viewport_width.read();
+                let vh = *self.viewport_height.read();
+                (vw, vh)
+            };
 
             let constraints = LayoutConstraints {
                 available_width: Some(viewport_width),
@@ -260,6 +252,7 @@ impl LayoutEngine {
                 ..Default::default()
             };
 
+            // No guards alive here
             self.layout_node_recursive(
                 root_id,
                 constraints,
@@ -272,7 +265,6 @@ impl LayoutEngine {
 
         let layout_time = start_time.elapsed();
         self.update_performance_metrics(layout_time).await;
-
         Ok(())
     }
 
@@ -286,15 +278,18 @@ impl LayoutEngine {
         generation: u64,
     ) -> Result<LayoutResult> {
         if let Some(cached) = self.get_cached_layout(node_id, &constraints, generation) {
-            let mut metrics = self.performance_metrics.write();
-            metrics.cache_hits += 1;
+            {
+                let mut metrics = self.performance_metrics.write();
+                metrics.cache_hits += 1;
+            }
             return Ok(cached.result);
         }
 
-        let mut metrics = self.performance_metrics.write();
-        metrics.cache_misses += 1;
-        metrics.total_layouts += 1;
-        drop(metrics);
+        {
+            let mut metrics = self.performance_metrics.write();
+            metrics.cache_misses += 1;
+            metrics.total_layouts += 1;
+        }
 
         let computed_styles = style_engine
             .get_computed_styles(node_id)
@@ -366,7 +361,9 @@ impl LayoutEngine {
         style_engine: &StyleEngine,
         generation: u64,
     ) -> Result<LayoutResult> {
-        let computed_styles = style_engine.get_computed_styles(node_id).unwrap();
+        let computed_styles = style_engine
+            .get_computed_styles(node_id)
+            .ok_or_else(|| LayoutError::Computation("No computed styles found".to_string()))?;
 
         let mut layout_box = self.compute_box_model(&computed_styles, &constraints)?;
 
@@ -435,13 +432,15 @@ impl LayoutEngine {
 
     async fn layout_inline_node(
         &self,
-        _node_id: NodeId,
+        node_id: NodeId,
         constraints: LayoutConstraints,
         _document: &Document,
         style_engine: &StyleEngine,
         _generation: u64,
     ) -> Result<LayoutResult> {
-        let computed_styles = style_engine.get_computed_styles(_node_id).unwrap();
+        let computed_styles = style_engine
+            .get_computed_styles(node_id)
+            .ok_or_else(|| LayoutError::Computation("No computed styles found".to_string()))?;
         let layout_box = self.compute_box_model(&computed_styles, &constraints)?;
         Ok(LayoutResult {
             layout_box,
@@ -464,106 +463,6 @@ impl LayoutEngine {
             .await
     }
 
-    async fn layout_text_node(
-        &self,
-        node: &Node,
-        computed_styles: &ComputedStyles,
-        constraints: &LayoutConstraints,
-    ) -> Result<LayoutResult> {
-        let text_content = node.get_text_content();
-        let font_size = match computed_styles.get_computed_value("font-size") {
-            Ok(ComputedValue::Length(length)) => length,
-            Ok(ComputedValue::Percentage(percentage)) => constraints
-                .available_width
-                .map(|w| w * percentage / 100.0)
-                .unwrap_or(16.0),
-            _ => 16.0, // Default font size
-        };
-        let line_height = match computed_styles.get_computed_value("line-height") {
-            Ok(ComputedValue::Length(length)) => length,
-            Ok(ComputedValue::Percentage(percentage)) => font_size * percentage / 100.0,
-            _ => font_size * 1.2, // Default line height
-        };
-
-        let available_width = constraints.available_width.unwrap_or(f32::INFINITY);
-
-        let (text_width, text_height, line_count) =
-            self.measure_text(&text_content, font_size, line_height, available_width);
-
-        let layout_box = LayoutBox {
-            content_x: 0.0,
-            content_y: 0.0,
-            content_width: text_width,
-            content_height: text_height,
-            ..Default::default()
-        };
-
-        Ok(LayoutResult {
-            layout_box,
-            baseline: Some(line_height * 0.8),
-            intrinsic_width: text_width,
-            intrinsic_height: text_height,
-            children_overflow: line_count > 1
-                && text_height > constraints.available_height.unwrap_or(f32::INFINITY),
-        })
-    }
-
-    fn measure_text(
-        &self,
-        text: &str,
-        font_size: f32,
-        line_height: f32,
-        available_width: f32,
-    ) -> (f32, f32, usize) {
-        let char_width = font_size * 0.6; // Approximation
-        let chars_per_line = (available_width / char_width) as usize;
-
-        if chars_per_line == 0 || text.is_empty() {
-            return (0.0, 0.0, 0);
-        }
-
-        let words: Vec<&str> = text.split_whitespace().collect();
-        let mut lines = Vec::new();
-        let mut current_line = String::new();
-        let mut current_width = 0.0;
-
-        for word in words {
-            let word_width = word.len() as f32 * char_width;
-            let space_width = char_width;
-
-            if current_line.is_empty() {
-                current_line = word.to_string();
-                current_width = word_width;
-            } else if current_width + space_width + word_width <= available_width {
-                current_line.push(' ');
-                current_line.push_str(word);
-                current_width += space_width + word_width;
-            } else {
-                lines.push(current_line);
-                current_line = word.to_string();
-                current_width = word_width;
-            }
-        }
-
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
-
-        let line_count = lines.len().max(1);
-        let text_width = if available_width == f32::INFINITY {
-            lines
-                .iter()
-                .map(|line| line.len() as f32 * char_width)
-                .fold(0.0f32, f32::max)
-        } else {
-            available_width.min(text.len() as f32 * char_width)
-        };
-
-        let text_height = line_count as f32 * line_height;
-
-        (text_width, text_height, line_count)
-    }
-
     async fn layout_children_parallel(
         &self,
         children: &[NodeId],
@@ -572,6 +471,8 @@ impl LayoutEngine {
         style_engine: &StyleEngine,
         generation: u64,
     ) -> Result<()> {
+        // Parallelize using rayon; each task blocks internally on the async call.
+        // No locks are held here.
         let results: Vec<Result<LayoutResult>> = children
             .par_iter()
             .map(|&child_id| {
@@ -589,8 +490,10 @@ impl LayoutEngine {
             result?;
         }
 
-        let mut metrics = self.performance_metrics.write();
-        metrics.parallel_layouts += 1;
+        {
+            let mut metrics = self.performance_metrics.write();
+            metrics.parallel_layouts += 1;
+        }
 
         Ok(())
     }
@@ -613,7 +516,6 @@ impl LayoutEngine {
             )
             .await?;
         }
-
         Ok(())
     }
 
@@ -643,6 +545,7 @@ impl LayoutEngine {
             Ok(ComputedValue::Length(v)) => v,
             _ => 0.0,
         };
+
         let bt = match computed_styles.get_computed_value("border-top-width") {
             Ok(ComputedValue::Length(v)) => v,
             _ => 0.0,
@@ -659,6 +562,7 @@ impl LayoutEngine {
             Ok(ComputedValue::Length(v)) => v,
             _ => 0.0,
         };
+
         let mt = match computed_styles.get_computed_value("margin-top") {
             Ok(ComputedValue::Length(v)) => v,
             _ => 0.0,
@@ -677,9 +581,11 @@ impl LayoutEngine {
         };
 
         let content_width = width
-            .or(constraints
-                .available_width
-                .map(|av| av - pl - pr - bl - br - ml - mr))
+            .or_else(|| {
+                constraints
+                    .available_width
+                    .map(|av| av - pl - pr - bl - br - ml - mr)
+            })
             .unwrap_or(0.0)
             .max(constraints.min_width);
 
@@ -713,15 +619,15 @@ impl LayoutEngine {
     ) -> Result<Option<f32>> {
         match computed_styles.get_computed_value(property) {
             Ok(value) => match value {
-                crate::core::css::ComputedValue::Length(length) => Ok(Some(length)),
-                crate::core::css::ComputedValue::Percentage(percentage) => {
+                ComputedValue::Length(length) => Ok(Some(length)),
+                ComputedValue::Percentage(percentage) => {
                     if let Some(available_size) = available {
                         Ok(Some(available_size * percentage / 100.0))
                     } else {
                         Ok(None)
                     }
                 }
-                crate::core::css::ComputedValue::Auto => Ok(None),
+                ComputedValue::Auto => Ok(None),
                 _ => Ok(None),
             },
             Err(_) => Ok(None),
@@ -731,7 +637,7 @@ impl LayoutEngine {
     fn get_display_type(&self, computed_styles: &ComputedStyles) -> Result<DisplayType> {
         match computed_styles.get_computed_value("display") {
             Ok(value) => match value {
-                crate::core::css::ComputedValue::Keyword(keyword) => match keyword.as_str() {
+                ComputedValue::Keyword(keyword) => match keyword.as_str() {
                     "none" => Ok(DisplayType::None),
                     "block" => Ok(DisplayType::Block),
                     "inline" => Ok(DisplayType::Inline),
@@ -796,9 +702,7 @@ impl LayoutEngine {
             constraints,
             result,
             generation,
-            dependencies: SmallVec::new(),
         };
-
         self.layout_cache.insert(node_id, cache_entry);
     }
 
@@ -834,9 +738,7 @@ impl LayoutEngine {
             *vw = width as f32;
             *vh = height as f32;
         }
-
         self.layout_cache.clear();
-
         Ok(())
     }
 
@@ -854,7 +756,6 @@ impl LayoutEngine {
 
     async fn update_performance_metrics(&self, layout_time: std::time::Duration) {
         let mut metrics = self.performance_metrics.write();
-
         let layout_time_us = layout_time.as_micros() as f64;
 
         if metrics.total_layouts == 1 {
@@ -867,6 +768,7 @@ impl LayoutEngine {
             metrics.max_layout_time_us = metrics.max_layout_time_us.max(layout_time_us);
         }
 
+        // Rough estimate (does not include heap allocations inside map entries)
         metrics.memory_usage_bytes = self.layout_cache.len() * std::mem::size_of::<LayoutCache>();
     }
 

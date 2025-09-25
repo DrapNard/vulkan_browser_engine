@@ -7,10 +7,12 @@ use tokio::sync::{mpsc, RwLock};
 pub type EventHandler = Box<dyn Fn(&Event) -> bool + Send + Sync>;
 pub type EventCallback = Arc<dyn Fn(&Event) + Send + Sync>;
 
+type ElementEventHandlers = HashMap<NodeId, HashMap<String, Vec<EventCallback>>>;
+
 pub struct EventSystem {
     event_queue: Arc<RwLock<VecDeque<Event>>>,
     global_handlers: Arc<RwLock<HashMap<String, Vec<EventCallback>>>>,
-    element_handlers: Arc<RwLock<HashMap<NodeId, HashMap<String, Vec<EventCallback>>>>>,
+    element_handlers: Arc<RwLock<ElementEventHandlers>>,
     event_sender: mpsc::UnboundedSender<Event>,
     event_receiver: Arc<RwLock<mpsc::UnboundedReceiver<Event>>>,
 }

@@ -1101,8 +1101,4 @@ impl PlacementGrid {
             }
         }
     }
-
-    fn is_occupied(&self, row: u32, col: u32) -> bool {
-        self.occupied.get(&(row, col)).copied().unwrap_or(false)
-    }
 }

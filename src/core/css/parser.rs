@@ -313,9 +313,8 @@ impl<'a> Tokenizer<'a> {
                     url.push(ch);
                     self.advance();
                 }
-            } else if ch == ')' {
-                break;
-            } else if ch.is_whitespace() {
+            } else if ch == ')' || ch.is_whitespace() {
+                // Consolidated to satisfy clippy::if_same_then_else
                 break;
             } else {
                 url.push(ch);

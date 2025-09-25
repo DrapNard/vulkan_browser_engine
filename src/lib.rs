@@ -1,16 +1,16 @@
 //! Vulkan Browser Engine (single-thread async friendly)
 //!
 //! Notes for the runtime/host crate:
-//! - Prefer running the engine on a single-thread Tokio runtime:
-//!     #[tokio::main(flavor = "current_thread")]
-//!     async fn main() { /* ... */ }
-//! - Or wrap the engine tasks in a `tokio::task::LocalSet` and use `spawn_local`.
-//! - This file intentionally avoids requiring `Send` on internal futures to keep
-//!   JIT/FFI/raw-pointer heavy subsystems off of cross-thread moves.
+//!  - Prefer running the engine on a single-thread Tokio runtime:
+//!    `#[tokio::main(flavor = "current_thread")] async fn main() { /* ... */ }`
+//!  - Or wrap the engine tasks in a `tokio::task::LocalSet` and use `spawn_local`.
+//!  - This file intentionally avoids requiring `Send` on internal futures to keep
+//!    JIT/FFI/raw-pointer heavy subsystems off of cross-thread moves.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::{panic::AssertUnwindSafe, sync::Arc};
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -38,6 +38,9 @@ use crate::pwa::PwaError;
 use crate::pwa::PwaRuntime as PwaManager;
 use crate::renderer::{LayoutTree, RenderError, VulkanRenderer};
 use crate::sandbox::{SandboxError, SandboxManager};
+
+/// Short alias to reduce trait-object verbosity in signatures/fields.
+type ErrorCallback = Arc<dyn Fn(&BrowserError) + Send + Sync>;
 
 #[derive(Error, Debug, Clone)]
 pub enum BrowserError {
@@ -202,76 +205,31 @@ pub struct NetworkMetrics {
 
 #[derive(Debug, Clone)]
 pub enum InputEvent {
-    MouseMove {
-        x: i32,
-        y: i32,
-    },
-    MouseClick {
-        x: i32,
-        y: i32,
-        button: u8,
-    },
-    MouseWheel {
-        x: i32,
-        y: i32,
-        delta_x: f64,
-        delta_y: f64,
-    },
-    KeyPress {
-        key: String,
-        modifiers: u8,
-    },
-    KeyRelease {
-        key: String,
-        modifiers: u8,
-    },
-    Scroll {
-        delta_x: f64,
-        delta_y: f64,
-    },
-    Touch {
-        x: i32,
-        y: i32,
-        pressure: f64,
-        id: u32,
-    },
-    Resize {
-        width: u32,
-        height: u32,
-    },
+    MouseMove { x: i32, y: i32 },
+    MouseClick { x: i32, y: i32, button: u8 },
+    MouseWheel { x: i32, y: i32, delta_x: f64, delta_y: f64 },
+    KeyPress { key: String, modifiers: u8 },
+    KeyRelease { key: String, modifiers: u8 },
+    Scroll { delta_x: f64, delta_y: f64 },
+    Touch { x: i32, y: i32, pressure: f64, id: u32 },
+    Resize { width: u32, height: u32 },
 }
 
 #[derive(Debug, Clone)]
 pub enum BrowserEvent {
-    PageLoaded {
-        url: String,
-        load_time_ms: u64,
-    },
-    NavigationStarted {
-        url: String,
-    },
-    JavaScriptError {
-        message: String,
-        line: u32,
-        column: u32,
-    },
-    NetworkError {
-        url: String,
-        error: String,
-    },
-    SecurityViolation {
-        description: String,
-    },
-    PerformanceWarning {
-        metric: String,
-        value: f64,
-        threshold: f64,
-    },
-    ErrorHandled {
-        message: String,
-    }, // emitted by error handler
+    PageLoaded { url: String, load_time_ms: u64 },
+    NavigationStarted { url: String },
+    JavaScriptError { message: String, line: u32, column: u32 },
+    NetworkError { url: String, error: String },
+    SecurityViolation { description: String },
+    PerformanceWarning { metric: String, value: f64, threshold: f64 },
+    ErrorHandled { message: String }, // emitted by error handler
 }
 
+/// The main engine. Intentionally uses `Arc<…>` around non-`Send` components,
+/// because this crate is meant to run on a **single-threaded runtime**. We
+/// scope clippy allows to this type to avoid muting the lints globally.
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct BrowserEngine {
     config: BrowserConfig,
     renderer: Arc<RwLock<VulkanRenderer>>,
@@ -291,7 +249,7 @@ pub struct BrowserEngine {
     is_loading_flag: Arc<RwLock<bool>>,
 
     // Error handler callback; defaults to logging and swallow.
-    error_handler: Arc<RwLock<Option<Arc<dyn Fn(&BrowserError) + Send + Sync>>>>,
+    error_handler: Arc<RwLock<Option<ErrorCallback>>>,
 }
 
 impl BrowserEngine {
@@ -346,7 +304,7 @@ impl BrowserEngine {
     where
         F: Fn(&BrowserError) + Send + Sync + 'static,
     {
-        let arc_cb = cb.map(|f| Arc::new(f) as Arc<dyn Fn(&BrowserError) + Send + Sync>);
+        let arc_cb: Option<ErrorCallback> = cb.map(|f| Arc::new(f) as ErrorCallback);
         *self.error_handler.write().await = arc_cb;
     }
 
