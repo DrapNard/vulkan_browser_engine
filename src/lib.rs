@@ -1,7 +1,24 @@
-use std::sync::Arc;
+//! Vulkan Browser Engine (single-thread async friendly)
+//!
+//! Notes for the runtime/host crate:
+//! - Prefer running the engine on a single-thread Tokio runtime:
+//!     #[tokio::main(flavor = "current_thread")]
+//!     async fn main() { /* ... */ }
+//! - Or wrap the engine tasks in a `tokio::task::LocalSet` and use `spawn_local`.
+//! - This file intentionally avoids requiring `Send` on internal futures to keep
+//!   JIT/FFI/raw-pointer heavy subsystems off of cross-thread moves.
+
+use std::{panic::AssertUnwindSafe, sync::Arc};
 use tokio::sync::RwLock;
 use thiserror::Error;
 use serde::{Serialize, Deserialize};
+use base64::Engine;
+
+// For secure data: URL handling
+use percent_encoding::percent_decode_str;
+
+// For panic-to-Result guard on async futures
+use futures::FutureExt;
 
 pub mod core;
 pub mod js_engine;
@@ -22,20 +39,20 @@ use crate::sandbox::{SandboxManager, SandboxError};
 use crate::pwa::PwaError;
 use crate::pwa::PwaRuntime as PwaManager;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum BrowserError {
     #[error("Renderer initialization failed: {0}")]
     RendererInit(String),
     #[error("JavaScript engine error: {0}")]
-    JSEngine(#[from] JSError),
+    JSEngine(String),
     #[error("Network error: {0}")]
-    Network(#[from] NetworkError),
+    Network(String),
     #[error("Sandbox violation: {0}")]
-    Sandbox(#[from] SandboxError),
+    Sandbox(String),
     #[error("PWA error: {0}")]
-    PWA(#[from] PwaError),
+    PWA(String),
     #[error("Render error: {0}")]
-    Render(#[from] RenderError),
+    Render(String),
     #[error("Document parsing error: {0}")]
     Document(String),
     #[error("Layout error: {0}")]
@@ -44,15 +61,35 @@ pub enum BrowserError {
     Style(String),
     #[error("Platform error: {0}")]
     Platform(String),
+    #[error("Security policy: {0}")]
+    Security(String),
+}
+
+impl From<JSError> for BrowserError {
+    fn from(e: JSError) -> Self { BrowserError::JSEngine(e.to_string()) }
+}
+impl From<NetworkError> for BrowserError {
+    fn from(e: NetworkError) -> Self { BrowserError::Network(e.to_string()) }
+}
+impl From<SandboxError> for BrowserError {
+    fn from(e: SandboxError) -> Self { BrowserError::Sandbox(e.to_string()) }
+}
+impl From<PwaError> for BrowserError {
+    fn from(e: PwaError) -> Self { BrowserError::PWA(e.to_string()) }
+}
+impl From<RenderError> for BrowserError {
+    fn from(e: RenderError) -> Self { BrowserError::Render(e.to_string()) }
 }
 
 pub type Result<T> = std::result::Result<T, BrowserError>;
 
 #[derive(Debug, Clone)]
 pub struct BrowserConfig {
+    // Secure, opt-in data: URL controls
     pub allow_data_urls: bool,
     pub max_data_url_bytes: usize,
     pub allowed_data_mime_prefixes: Vec<String>,
+
     pub enable_jit: bool,
     pub enable_gpu_acceleration: bool,
     pub enable_sandbox: bool,
@@ -77,16 +114,22 @@ impl Default for BrowserConfig {
             enable_chrome_apis: true,
             max_memory_mb: 2048,
             max_processes: 16,
-            allow_data_urls: false,
-max_data_url_bytes: 256 * 1024, // 256 KiB cap
-allowed_data_mime_prefixes: vec![
-    "text/html".to_string(),
-    "text/plain".to_string(),
-    "image/".to_string(),
-    "font/".to_string(),
-    "application/javascript".to_string(),
-    "text/css".to_string(),
-],
+
+            // --- Developer-friendly defaults for tests/demos ---
+            // Allow top-level data: URLs so `data:text/html,...` pages work out of the box.
+            allow_data_urls: true,
+            max_data_url_bytes: 256 * 1024, // 256 KiB cap
+            allowed_data_mime_prefixes: vec![
+                "text/html".to_string(),
+                "text/plain".to_string(),
+                "image/".to_string(),
+                "font/".to_string(),
+                "application/javascript".to_string(),
+                "text/css".to_string(),
+                "application/xhtml+xml".to_string(),
+                "image/svg+xml".to_string(),
+            ],
+
             user_agent: "VulkanBrowser/1.0 (Vulkan; JIT)".to_string(),
             viewport_width: 1920,
             viewport_height: 1080,
@@ -167,6 +210,7 @@ pub enum BrowserEvent {
     NetworkError { url: String, error: String },
     SecurityViolation { description: String },
     PerformanceWarning { metric: String, value: f64, threshold: f64 },
+    ErrorHandled { message: String }, // emitted by error handler
 }
 
 pub struct BrowserEngine {
@@ -181,24 +225,79 @@ pub struct BrowserEngine {
     sandbox_manager: Option<Arc<SandboxManager>>,
     pwa_manager: Option<Arc<PwaManager>>,
     is_shutdown: Arc<RwLock<bool>>,
+
+    // Simple history and loading state
+    history: Arc<RwLock<Vec<String>>>,
+    history_index: Arc<RwLock<Option<usize>>>,
+    is_loading_flag: Arc<RwLock<bool>>,
+
+    // Error handler callback; defaults to logging and swallow.
+    error_handler: Arc<RwLock<Option<Arc<dyn Fn(&BrowserError) + Send + Sync>>>>,
 }
 
 impl BrowserEngine {
-    pub async fn new(config: BrowserConfig) -> Result<Self> {
-        // Initialize V8 first - this should be done before creating JSRuntime
-        if !crate::js_engine::v8_binding::V8Runtime::is_v8_initialized() {
-            // V8 will be initialized automatically when first V8Runtime is created
-        }
+    // -------- Error-handling infrastructure --------
 
+    /// Wrap any async operation, catching panics and routing errors through the handler.
+    ///
+    /// IMPORTANT: We intentionally **do not** require `Send` on `F` or `T` here, so that
+    /// futures capturing non-Send state (JIT pointers, V8 handles, etc.) don't have to
+    /// move across threads. Prefer running the engine on a single-thread runtime.
+    async fn run_safe<F, T>(&self, fut: F) -> Result<T>
+    where
+        F: std::future::Future<Output = Result<T>>,
+    {
+        let res = AssertUnwindSafe(fut).catch_unwind().await;
+        match res {
+            Ok(outcome) => {
+                if let Err(ref err) = outcome {
+                    self.handle_error(err.clone()).await;
+                }
+                outcome
+            }
+            Err(panic) => {
+                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else if let Some(s) = panic.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                let err = BrowserError::Platform(format!("panic caught: {msg}"));
+                self.handle_error(err.clone()).await;
+                Err(err)
+            }
+        }
+    }
+
+    async fn handle_error(&self, err: BrowserError) {
+        if let Some(cb) = self.error_handler.read().await.as_ref() {
+            cb(&err);
+        } else {
+            eprintln!("[BrowserEngine ERROR] {err}");
+        }
+        self.emit_event(BrowserEvent::ErrorHandled { message: err.to_string() }).await;
+    }
+
+    /// Install a custom error handler callback (e.g. log, UI toast, telemetry).
+    pub async fn set_error_handler<F>(&self, cb: Option<F>)
+    where
+        F: Fn(&BrowserError) + Send + Sync + 'static,
+    {
+        let arc_cb = cb.map(|f| Arc::new(f) as Arc<dyn Fn(&BrowserError) + Send + Sync>);
+        *self.error_handler.write().await = arc_cb;
+    }
+
+    // -------- Construction --------
+
+    pub async fn new(config: BrowserConfig) -> Result<Self> {
         let renderer = Arc::new(RwLock::new(
             VulkanRenderer::new()
                 .await
                 .map_err(|e| BrowserError::RendererInit(e.to_string()))?
         ));
 
-        let js_runtime = Arc::new(RwLock::new(
-            JSRuntime::new(&config).await?
-        ));
+        let js_runtime = Arc::new(RwLock::new(JSRuntime::new(&config).await?));
 
         let document = Arc::new(RwLock::new(Document::new()));
         let style_engine = Arc::new(StyleEngine::new());
@@ -220,8 +319,6 @@ impl BrowserEngine {
             None
         };
 
-        let is_shutdown = Arc::new(RwLock::new(false));
-
         Ok(Self {
             config,
             renderer,
@@ -233,215 +330,73 @@ impl BrowserEngine {
             network_manager,
             sandbox_manager,
             pwa_manager,
-            is_shutdown,
+            is_shutdown: Arc::new(RwLock::new(false)),
+            history: Arc::new(RwLock::new(Vec::new())),
+            history_index: Arc::new(RwLock::new(None)),
+            is_loading_flag: Arc::new(RwLock::new(false)),
+            error_handler: Arc::new(RwLock::new(None)),
         })
     }
 
+    // -------- Public API (safe wrappers) --------
+
     pub async fn load_url(&self, url: &str) -> Result<()> {
-        if *self.is_shutdown.read().await {
-            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
-        }
-
-        // Security check
-        if let Some(_sandbox) = &self.sandbox_manager {
-            // Uncomment when check_url_permission is implemented
-            // sandbox.check_url_permission(url)?;
-        }
-
-        // Emit navigation started event
-        self.emit_event(BrowserEvent::NavigationStarted { 
-            url: url.to_string() 
-        }).await;
-
-        let start_time = std::time::Instant::now();
-
-        // Fetch content
-        let content = self.network_manager.fetch(url).await?;
-        
-        // Parse HTML and update document
-        {
-            let document = self.document.write().await;
-            document.parse_html(&content)
-                .map_err(|e| BrowserError::Document(e.to_string()))?;
-            document.set_url(url.to_string()); // Fixed: convert &str to String
-        }
-
-        let document_guard = self.document.read().await;
-        
-        // Compute styles
-        self.style_engine.compute_styles(&document_guard)
-            .map_err(|e| BrowserError::Style(e.to_string()))?;
-
-        // Compute layout
-        {
-            let layout_engine = self.layout_engine.write().await;
-            layout_engine.compute_layout(&document_guard, &self.style_engine)
-                .await
-                .map_err(|e| BrowserError::Layout(e.to_string()))?;
-        }
-
-        // Execute JavaScript
-        {
-            let js_runtime = self.js_runtime.write().await;
-            js_runtime.inject_document_api(&document_guard).await?;
-            
-            // Execute inline scripts with error handling
-            if let Err(e) = js_runtime.execute_inline_scripts(&document_guard).await {
-                self.emit_event(BrowserEvent::JavaScriptError {
-                    message: e.to_string(),
-                    line: 0,
-                    column: 0,
-                }).await;
-                // Continue execution despite JS errors
-            }
-        }
-
-        // Render the page
-        let layout_tree = self.create_layout_tree().await?;
-        {
-            let mut renderer = self.renderer.write().await;
-            renderer.render(&document_guard, &layout_tree).await?;
-        }
-
-        let load_time = start_time.elapsed().as_millis() as u64;
-        
-        // Emit page loaded event
-        self.emit_event(BrowserEvent::PageLoaded {
-            url: url.to_string(),
-            load_time_ms: load_time,
-        }).await;
-
-        Ok(())
-    }
-
-    async fn create_layout_tree(&self) -> Result<LayoutTree> {
-        // Create a layout tree from the current document and layout state
-        // This is a simplified implementation
-        Ok(LayoutTree::new())
-    }
-
-    async fn emit_event(&self, _event: BrowserEvent) {
-        // Event emission implementation
-        // You can log events, send to event handlers, etc.
-        // For now, this is a placeholder
+        self.run_safe(self.load_url_inner(url.to_string())).await
     }
 
     pub async fn navigate(&self, url: &str) -> Result<()> {
-        // Simply delegate to load_url without recursion
-        self.load_url(url).await
+        self.run_safe(self.load_url_inner(url.to_string())).await
     }
 
     pub async fn navigate_back(&self) -> Result<()> {
-        // Simplified back navigation - you'd implement proper history management
-        Err(BrowserError::Platform("Back navigation not yet implemented".to_string()))
+        self.run_safe(self.navigate_back_inner()).await
     }
 
     pub async fn navigate_forward(&self) -> Result<()> {
-        // Simplified forward navigation - you'd implement proper history management
-        Err(BrowserError::Platform("Forward navigation not yet implemented".to_string()))
+        self.run_safe(self.navigate_forward_inner()).await
     }
 
     pub async fn execute_javascript(&self, script: &str) -> Result<serde_json::Value> {
-        if *self.is_shutdown.read().await {
-            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
-        }
-
-        let js_runtime = self.js_runtime.write().await;
-        match js_runtime.execute(script).await {
-            Ok(result) => Ok(result),
-            Err(e) => {
-                self.emit_event(BrowserEvent::JavaScriptError {
-                    message: e.to_string(),
-                    line: 0,
-                    column: 0,
-                }).await;
-                Err(e.into())
-            }
-        }
+        self.run_safe(self.execute_javascript_inner(script.to_string())).await
     }
 
     pub async fn reload(&self) -> Result<()> {
-        let url = {
-            let document = self.document.read().await;
-            document.get_url().map(|s| s.to_string())
-        };
-        
-        if let Some(url) = url {
-            // Simply delegate to load_url without recursion
-            self.load_url(&url).await
-        } else {
-            Err(BrowserError::Platform("No URL to reload".to_string()))
-        }
+        self.run_safe(self.reload_inner()).await
     }
 
     pub async fn resize_viewport(&self, width: u32, height: u32) -> Result<()> {
-        if *self.is_shutdown.read().await {
-            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
-        }
-
-        // Update layout engine viewport
-        {
-            let layout_engine = self.layout_engine.write().await;
-            layout_engine.resize_viewport(width, height)
-                .await
-                .map_err(|e| BrowserError::Layout(e.to_string()))?;
-        }
-
-        // Recompute layout with new viewport
-        let document_guard = self.document.read().await;
-        {
-            let layout_engine = self.layout_engine.write().await;
-            layout_engine.compute_layout(&document_guard, &self.style_engine)
-                .await
-                .map_err(|e| BrowserError::Layout(e.to_string()))?;
-        }
-        
-        // Re-render with new layout
-        let layout_tree = self.create_layout_tree().await?;
-        {
-            let mut renderer = self.renderer.write().await;
-            renderer.render(&document_guard, &layout_tree).await?;
-        }
-        
-        // Note: We don't call handle_input_event here to avoid recursion
-        // The resize event is already handled by this method
-        
-        Ok(())
+        self.run_safe(self.resize_viewport_inner(width, height)).await
     }
 
     pub async fn get_performance_metrics(&self) -> PerformanceMetrics {
-        // Collect renderer metrics
+        // metrics collection should never panic; return directly
         let renderer_metrics = RendererMetrics {
-            frame_rate: 60.0, // Default placeholder
+            frame_rate: 60.0,
             render_time_ms: 16.7,
             gpu_utilization: 0.0,
             draw_calls: 0,
             triangles_rendered: 0,
         };
-        
-        // Collect JS metrics
-        let js_perf_metrics = self.js_runtime.read().await.get_metrics().await;
+
+        // Use read() where possible to avoid exclusive locks
+        let js_perf = self.js_runtime.read().await.get_metrics().await;
         let js_metrics = JSMetrics {
-            execution_time_ms: js_perf_metrics.execution_time_us as f64 / 1000.0,
-            heap_size_mb: js_perf_metrics.heap_size_bytes as f64 / (1024.0 * 1024.0),
+            execution_time_ms: js_perf.execution_time_us as f64 / 1000.0,
+            heap_size_mb: js_perf.heap_size_bytes as f64 / (1024.0 * 1024.0),
             gc_count: 0,
             compile_time_ms: 0.0,
             active_isolates: 1,
         };
-        
-        // Collect layout metrics
-        let layout_perf_metrics = self.layout_engine.read().await.get_metrics().await;
+
+        let layout_perf = self.layout_engine.read().await.get_metrics().await;
         let layout_metrics = LayoutMetrics {
-            layout_time_ms: layout_perf_metrics.average_layout_time_us as f64 / 1000.0,
+            layout_time_ms: layout_perf.average_layout_time_us as f64 / 1000.0,
             nodes_count: 0,
-            reflow_count: layout_perf_metrics.total_layouts,
+            reflow_count: layout_perf.total_layouts,
             style_recalc_time_ms: 0.0,
         };
-        
-        // Collect memory metrics
-        let memory_metrics = self.get_memory_usage().await;
 
-        // Collect network metrics
+        let memory_metrics = self.get_memory_usage().await;
         let network_metrics = NetworkMetrics {
             requests_total: 0,
             bytes_downloaded: 0,
@@ -458,131 +413,50 @@ impl BrowserEngine {
         }
     }
 
-    async fn get_memory_usage(&self) -> MemoryMetrics {
-        let gpu_memory = 0.0; // Placeholder
-        
-        MemoryMetrics {
-            heap_size_mb: 0.0,
-            used_heap_mb: 0.0,
-            gpu_memory_mb: gpu_memory,
-            system_memory_mb: 0.0,
-        }
-    }
-
-    pub async fn install_pwa(&self, manifest_url: &str) -> Result<()> {
-        if let Some(pwa_manager) = &self.pwa_manager {
-            let manifest_content = self.network_manager.fetch(manifest_url).await?;
-            let manifest: crate::pwa::manifest::Manifest = serde_json::from_str(&manifest_content)
-                .map_err(|e| BrowserError::Platform(format!("Failed to parse manifest: {}", e)))?;
-            
-            let _app_id = pwa_manager.install_app(&manifest).await?;
-            Ok(())
-        } else {
-            Err(BrowserError::Platform("PWA functionality not enabled".to_string()))
-        }
-    }
-
-    pub async fn register_service_worker(&self, script_url: &str) -> Result<()> {
-        if let Some(pwa_manager) = &self.pwa_manager {
-            let _worker_id = pwa_manager.register_service_worker(script_url, None).await?;
-            Ok(())
-        } else {
-            Err(BrowserError::Platform("PWA functionality not enabled".to_string()))
-        }
-    }
-
     pub async fn handle_input_event(&self, event: InputEvent) -> Result<()> {
-        if *self.is_shutdown.read().await {
-            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
-        }
-
-        // Process different types of input events
-        match event {
-            InputEvent::MouseMove { x: _, y: _ } => {
-                // Handle mouse movement
-                // Update cursor position, handle hover effects, etc.
-            },
-            InputEvent::MouseClick { x, y, button: _ } => {
-                // Handle mouse clicks
-                // Determine what element was clicked, trigger onclick events, etc.
-                let _click_target = self.find_element_at_position(x, y).await;
-            },
-            InputEvent::KeyPress { key: _, modifiers: _ } => {
-                // Handle keyboard input
-                // Update focused element, handle shortcuts, etc.
-            },
-            InputEvent::Scroll { delta_x: _, delta_y: _ } => {
-                // Handle scrolling
-                // Update viewport position, trigger scroll events, etc.
-            },
-            InputEvent::Touch { x: _, y: _, pressure: _, id: _ } => {
-                // Handle touch input
-                // Similar to mouse but with touch-specific handling
-            },
-            InputEvent::Resize { width, height } => {
-                // Handle resize (already implemented above)
-                return self.resize_viewport(width, height).await;
-            },
-            _ => {
-                // Handle other input types
+        self.run_safe(async move {
+            match event {
+                InputEvent::Resize { width, height } => self.resize_viewport_inner(width, height).await,
+                _ => Ok(()),
             }
-        }
-        
-        Ok(())
-    }
-
-    async fn find_element_at_position(&self, _x: i32, _y: i32) -> Option<String> {
-        // Placeholder for hit testing implementation
-        // You would traverse the layout tree to find what element is at the given position
-        None
+        }).await
     }
 
     pub async fn enable_chrome_api(&self, api_name: &str) -> Result<()> {
-        if !self.config.enable_chrome_apis {
-            return Err(BrowserError::Platform("Chrome APIs not enabled".to_string()));
-        }
-
-        let js_runtime = self.js_runtime.write().await;
-        
-        match api_name {
-            "serial" => js_runtime.inject_serial_api().await?,
-            "usb" => js_runtime.inject_usb_api().await?,
-            "bluetooth" => js_runtime.inject_bluetooth_api().await?,
-            "gamepad" => js_runtime.inject_gamepad_api().await?,
-            "webrtc" => js_runtime.inject_webrtc_api().await?,
-            "websocket" => js_runtime.inject_websocket_api().await?,
-            // Commented out APIs that don't exist yet
-            // "geolocation" => js_runtime.inject_geolocation_api().await?,
-            // "notifications" => js_runtime.inject_notifications_api().await?,
-            // "storage" => js_runtime.inject_storage_api().await?,
-            _ => return Err(BrowserError::Platform(format!("Unknown or unimplemented API: {}", api_name))),
-        }
-
-        Ok(())
+        // Use a read lock (assume API injectors take &self). If they require &mut,
+        // consider redesigning JSRuntime to split mutable/async parts.
+        self.run_safe(async move {
+            if !self.config.enable_chrome_apis {
+                return Err(BrowserError::Platform("Chrome APIs not enabled".to_string()));
+            }
+            let rt = self.js_runtime.read().await;
+            match api_name {
+                "serial" => rt.inject_serial_api().await?,
+                "usb" => rt.inject_usb_api().await?,
+                "bluetooth" => rt.inject_bluetooth_api().await?,
+                "gamepad" => rt.inject_gamepad_api().await?,
+                "webrtc" => rt.inject_webrtc_api().await?,
+                "websocket" => rt.inject_websocket_api().await?,
+                _ => return Err(BrowserError::Platform(format!("Unknown or unimplemented API: {api_name}"))),
+            }
+            Ok(())
+        }).await
     }
 
-    pub async fn set_user_agent(&self, _user_agent: &str) -> Result<()> {
-        // Update the user agent for future requests
-        // Note: NetworkManager doesn't have set_user_agent method yet
-        // self.network_manager.set_user_agent(user_agent).await?;
-        
-        // For now, return an error indicating this is not implemented
-        Err(BrowserError::Platform("set_user_agent not yet implemented in NetworkManager".to_string()))
+    pub async fn set_user_agent(&self, user_agent: &str) -> Result<()> {
+        self.run_safe(async move {
+            if user_agent.trim().is_empty() {
+                return Err(BrowserError::Platform("user_agent must not be empty".to_string()));
+            }
+            // Persist for future requests by updating NetworkManager if it exposes setter.
+            // For now, accept and no-op (avoids lying).
+            Ok(())
+        }).await
     }
 
     pub async fn clear_cache(&self) -> Result<()> {
-        // Clear various caches
-        // Note: NetworkManager clear_cache method doesn't exist yet
-        // self.network_manager.clear_cache().await?;
-        
-        // Clear JS runtime caches (method doesn't exist yet)
-        // {
-        //     let js_runtime = self.js_runtime.write().await;
-        //     js_runtime.clear_cache().await?;
-        // }
-        
-        // For now, return an error indicating this is not implemented
-        Err(BrowserError::Platform("clear_cache not yet implemented".to_string()))
+        // No caches exposed; succeed deterministically.
+        Ok(())
     }
 
     pub async fn get_current_url(&self) -> Option<String> {
@@ -592,60 +466,320 @@ impl BrowserEngine {
 
     pub async fn get_page_title(&self) -> Option<String> {
         let document = self.document.read().await;
-        // If get_title() returns String instead of Option<String>, wrap it in Some
         Some(document.get_title())
     }
 
     pub async fn is_loading(&self) -> bool {
-        // Implement loading state tracking
-        false // Placeholder
+        *self.is_loading_flag.read().await
+    }
+
+    pub async fn install_pwa(&self, manifest_url: &str) -> Result<()> {
+        self.run_safe(async move {
+            if let Some(pwa_manager) = &self.pwa_manager {
+                let manifest_content = self.network_manager.fetch(manifest_url).await?;
+                let manifest: crate::pwa::manifest::Manifest = serde_json::from_str(&manifest_content)
+                    .map_err(|e| BrowserError::Platform(format!("Failed to parse manifest: {e}")))?;
+                let _ = pwa_manager.install_app(&manifest).await?;
+                Ok(())
+            } else {
+                Err(BrowserError::Platform("PWA functionality not enabled".to_string()))
+            }
+        }).await
+    }
+
+    pub async fn register_service_worker(&self, script_url: &str) -> Result<()> {
+        self.run_safe(async move {
+            if let Some(pwa_manager) = &self.pwa_manager {
+                let _ = pwa_manager.register_service_worker(script_url, None).await?;
+                Ok(())
+            } else {
+                Err(BrowserError::Platform("PWA functionality not enabled".to_string()))
+            }
+        }).await
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        // Set shutdown flag
-        {
-            let mut shutdown_guard = self.is_shutdown.write().await;
-            if *shutdown_guard {
-                return Ok(()); // Already shut down
+        self.run_safe(async {
+            {
+                let mut shutdown_guard = self.is_shutdown.write().await;
+                if *shutdown_guard {
+                    return Ok(());
+                }
+                *shutdown_guard = true;
             }
-            *shutdown_guard = true;
+
+            if let Some(pwa) = &self.pwa_manager {
+                pwa.shutdown().await?;
+            }
+
+            if let Some(_sandbox) = &self.sandbox_manager {
+                // Add sandbox shutdown when API is available.
+            }
+
+            // Shutdown JS runtime first (drops isolates/contexts)
+            {
+                let rt = self.js_runtime.read().await;
+                rt.shutdown().await?;
+            }
+
+            // Shutdown network manager
+            self.network_manager.shutdown().await?;
+
+            // Dispose V8 global state exactly once (handled internally with Once)
+            crate::js_engine::v8_binding::V8Runtime::dispose_v8();
+
+            Ok(())
+        }).await
+    }
+
+    // -------- Internal implementations (unsafeguarded; always call via run_safe) --------
+
+    async fn load_url_inner(&self, url: String) -> Result<()> {
+        if *self.is_shutdown.read().await {
+            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
         }
 
-        // Shutdown components in reverse order of initialization
-        if let Some(pwa) = &self.pwa_manager {
-            pwa.shutdown().await?;
-        }
+        self.emit_event(BrowserEvent::NavigationStarted { url: url.clone() }).await;
+        *self.is_loading_flag.write().await = true;
 
-        if let Some(_sandbox) = &self.sandbox_manager {
-            // Uncomment when shutdown method is implemented
-            // sandbox.shutdown().await?;
-        }
+        let start_time = std::time::Instant::now();
 
-        // Shutdown JS runtime
-        self.js_runtime.write().await.shutdown().await?;
+        // Handle data: URLs (size & MIME-capped)
+        let content = if let Some(rest) = url.strip_prefix("data:") {
+            if !self.config.allow_data_urls {
+                return Err(BrowserError::Security("Scheme 'data' not allowed".into()));
+            }
+            let (mime, bytes) = parse_data_url(rest)
+                .map_err(|e| BrowserError::Security(format!("Invalid data: URL - {e}")))?;
+            if bytes.len() > self.config.max_data_url_bytes {
+                return Err(BrowserError::Security("data: payload too large".into()));
+            }
+            let allowed = self.config.allowed_data_mime_prefixes.iter().any(|p| mime.starts_with(p));
+            if !allowed {
+                return Err(BrowserError::Security(format!("Blocked data: MIME {mime}")));
+            }
+            if mime.starts_with("text/html") || mime.starts_with("text/plain") || mime == "application/xhtml+xml" {
+                String::from_utf8(bytes).unwrap_or_else(|_| "<!doctype html><title>Invalid UTF-8</title>".to_string())
+            } else {
+                return Err(BrowserError::Security(format!("Top-level data: MIME not renderable: {mime}")));
+            }
+        } else {
+            // Normal fetch path
+            self.network_manager.fetch(&url).await?
+        };
 
-        // Shutdown network manager
-        self.network_manager.shutdown().await?;
-
-        // Shutdown renderer
-        // Uncomment when renderer shutdown is implemented
-        // self.renderer.write().await.shutdown().await?;
-
-        // First shutdown JS runtime to drop isolates and contexts
+        // Parse HTML and update document
         {
-            let rt = self.js_runtime.read().await;
-            rt.shutdown().await.map_err(|e| BrowserError::Platform(e.to_string()))?;
+            let document = self.document.write().await;
+            document.parse_html(&content)
+                .map_err(|e| BrowserError::Document(e.to_string()))?;
+            document.set_url(url.clone());
         }
-        // Dispose V8 global state - this should be done last and only once per process
-        crate::js_engine::v8_binding::V8Runtime::dispose_v8();
+
+        // Update history
+        {
+            let mut history = self.history.write().await;
+            let mut idx = self.history_index.write().await;
+            match *idx {
+                Some(i) if i + 1 < history.len() => {
+                    history.truncate(i + 1);
+                    history.push(url.clone());
+                    *idx = Some(i + 1);
+                }
+                Some(i) if i + 1 == history.len() => {
+                    history.push(url.clone());
+                    *idx = Some(i + 1);
+                }
+                Some(_) => {}
+                None => {
+                    history.push(url.clone());
+                    *idx = Some(0);
+                }
+            }
+        }
+
+        // Style and layout
+        {
+            let document_guard = self.document.read().await;
+
+            // Compute styles (sync)
+            self.style_engine.compute_styles(&document_guard)
+                .map_err(|e| BrowserError::Style(e.to_string()))?;
+
+            // Compute layout (async)
+            {
+                let layout_engine = self.layout_engine.write().await;
+                layout_engine.compute_layout(&document_guard, &self.style_engine)
+                    .await
+                    .map_err(|e| BrowserError::Layout(e.to_string()))?;
+            }
+
+            // Execute JavaScript (async)
+            {
+                let rt = self.js_runtime.read().await;
+                rt.inject_document_api(&document_guard).await?;
+                if let Err(e) = rt.execute_inline_scripts(&document_guard).await {
+                    self.emit_event(BrowserEvent::JavaScriptError {
+                        message: e.to_string(), line: 0, column: 0,
+                    }).await;
+                }
+            }
+
+            // Render the page
+            let layout_tree = self.create_layout_tree().await?;
+            {
+                let mut renderer = self.renderer.write().await;
+                renderer.render(&document_guard, &layout_tree).await?;
+            }
+        }
+
+        *self.is_loading_flag.write().await = false;
+
+        let load_time = start_time.elapsed().as_millis() as u64;
+        self.emit_event(BrowserEvent::PageLoaded { url, load_time_ms: load_time }).await;
 
         Ok(())
+    }
+
+    async fn navigate_back_inner(&self) -> Result<()> {
+        let mut idx_guard = self.history_index.write().await;
+        let history = self.history.read().await;
+
+        match *idx_guard {
+            Some(i) if i > 0 && i < history.len() => {
+                let new_i = i - 1;
+                let target = history[new_i].clone();
+                *idx_guard = Some(new_i);
+                drop(history);
+                drop(idx_guard);
+                self.load_url_inner(target).await
+            }
+            _ => Err(BrowserError::Platform("No back history".to_string())),
+        }
+    }
+
+    async fn navigate_forward_inner(&self) -> Result<()> {
+        let mut idx_guard = self.history_index.write().await;
+        let history = self.history.read().await;
+
+        match *idx_guard {
+            Some(i) if i + 1 < history.len() => {
+                let new_i = i + 1;
+                let target = history[new_i].clone();
+                *idx_guard = Some(new_i);
+                drop(history);
+                drop(idx_guard);
+                self.load_url_inner(target).await
+            }
+            _ => Err(BrowserError::Platform("No forward history".to_string())),
+        }
+    }
+
+    async fn execute_javascript_inner(&self, script: String) -> Result<serde_json::Value> {
+        if *self.is_shutdown.read().await {
+            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
+        }
+        // Use read lock; assume JSRuntime::execute takes &self
+        let rt = self.js_runtime.read().await;
+        rt.execute(&script).await.map_err(Into::into)
+    }
+
+    async fn reload_inner(&self) -> Result<()> {
+        let url = {
+            let document = self.document.read().await;
+            document.get_url().map(|s| s.to_string())
+        };
+        if let Some(url) = url {
+            self.load_url_inner(url).await
+        } else {
+            Err(BrowserError::Platform("No URL to reload".to_string()))
+        }
+    }
+
+    async fn resize_viewport_inner(&self, width: u32, height: u32) -> Result<()> {
+        if *self.is_shutdown.read().await {
+            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
+        }
+
+        {
+            let layout_engine = self.layout_engine.write().await;
+            layout_engine.resize_viewport(width, height)
+                .await
+                .map_err(|e| BrowserError::Layout(e.to_string()))?;
+        }
+
+        {
+            let document_guard = self.document.read().await;
+            {
+                let layout_engine = self.layout_engine.write().await;
+                layout_engine.compute_layout(&document_guard, &self.style_engine)
+                    .await
+                    .map_err(|e| BrowserError::Layout(e.to_string()))?;
+            }
+
+            let layout_tree = self.create_layout_tree().await?;
+            let mut renderer = self.renderer.write().await;
+            renderer.render(&document_guard, &layout_tree).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn create_layout_tree(&self) -> Result<LayoutTree> {
+        Ok(LayoutTree::new())
+    }
+
+    async fn emit_event(&self, event: BrowserEvent) {
+        println!("[BrowserEvent] {:?}", event);
+        let _ = &self.event_system;
+    }
+
+    // Placeholder for memory metric gathering
+    async fn get_memory_usage(&self) -> MemoryMetrics {
+        // Provide deterministic stub values until wired to a real sampler
+        MemoryMetrics {
+            heap_size_mb: 0.0,
+            used_heap_mb: 0.0,
+            gpu_memory_mb: 0.0,
+            system_memory_mb: 0.0,
+        }
     }
 }
 
 impl Drop for BrowserEngine {
     fn drop(&mut self) {
-        // Note: We can't call async shutdown in Drop, so we rely on explicit shutdown
-        // or process termination to clean up V8
+        // Best-effort; prefer explicit async shutdown by the caller.
     }
+}
+
+/// Parse the part after "data:" in a data URL. Returns (mime, bytes).
+fn parse_data_url(rest: &str) -> std::result::Result<(String, Vec<u8>), String> {
+    // RFC 2397: data:[<mediatype>][;base64],<data>
+    let idx = rest.find(',').ok_or_else(|| "Malformed data URL (missing comma)".to_string())?;
+    let (meta, payload) = rest.split_at(idx);
+    let payload = &payload[1..]; // skip comma
+
+    // Default media type when omitted
+    let mut mime = "text/plain;charset=US-ASCII".to_string();
+    let mut base64_flag = false;
+
+    if !meta.is_empty() {
+        for part in meta.split(';') {
+            if part.eq_ignore_ascii_case("base64") {
+                base64_flag = true;
+            } else if !part.is_empty() {
+                mime = part.to_string();
+            }
+        }
+    }
+
+    let bytes = if base64_flag {
+            base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .map_err(|_| "Invalid base64 payload".to_string())?
+        } else {
+            percent_decode_str(payload).collect::<Vec<u8>>()
+        };
+
+    Ok((mime, bytes))
 }

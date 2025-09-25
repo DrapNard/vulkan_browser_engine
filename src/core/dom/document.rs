@@ -300,9 +300,11 @@ pub struct InlineScript {
     pub nonce: Option<String>,
 }
 
+type MutationCallback = dyn Fn(&[MutationRecord]) + Send + Sync;
+
 #[derive(Clone)]
 pub struct MutationObserver {
-    pub callback: Arc<dyn Fn(&[MutationRecord]) + Send + Sync>,
+    pub callback: Arc<MutationCallback>,
     pub observe_child_list: bool,
     pub observe_attributes: bool,
     pub observe_character_data: bool,

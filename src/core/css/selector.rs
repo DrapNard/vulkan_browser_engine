@@ -149,7 +149,7 @@ impl NthPattern {
                 if input == "n" {
                     Ok(Self::new(1, 0))
                 } else if input.ends_with('n') {
-                    let a_str = input[..input.len()-1].trim();
+                    let a_str = input.strip_suffix('n').unwrap().trim();
                     let a = match a_str {
                         "" | "+" => 1,
                         "-" => -1,
