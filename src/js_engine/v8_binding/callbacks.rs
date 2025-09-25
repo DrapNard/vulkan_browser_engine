@@ -1,12 +1,11 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 use v8::{
-    HandleScope, FunctionCallbackArguments, ReturnValue, 
-    PromiseResolver, Object, Function, String as V8String, 
-    Local, TryCatch
+    Function, FunctionCallbackArguments, HandleScope, Local, Object, PromiseResolver, ReturnValue,
+    String as V8String, TryCatch,
 };
-use tracing::{info, warn, error, debug};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CallbackError {
@@ -66,12 +65,12 @@ impl V8CallbackHelper {
         }
 
         let arg = args.get(index);
-        let v8_string = arg.to_string(scope).ok_or_else(|| {
-            CallbackError::InvalidArgument {
+        let v8_string = arg
+            .to_string(scope)
+            .ok_or_else(|| CallbackError::InvalidArgument {
                 index,
                 message: "Cannot convert to string".to_string(),
-            }
-        })?;
+            })?;
 
         Ok(v8_string.to_rust_string_lossy(scope))
     }
@@ -79,9 +78,8 @@ impl V8CallbackHelper {
     pub fn create_promise_with_resolver<'s>(
         scope: &mut HandleScope<'s>,
     ) -> CallbackResult<(Local<'s, v8::Promise>, Local<'s, PromiseResolver>)> {
-        let resolver = PromiseResolver::new(scope)
-            .ok_or(CallbackError::PromiseCreation)?;
-        
+        let resolver = PromiseResolver::new(scope).ok_or(CallbackError::PromiseCreation)?;
+
         let promise = resolver.get_promise(scope);
         Ok((promise, resolver))
     }
@@ -122,15 +120,12 @@ impl V8CallbackHelper {
         let name = Self::create_v8_string(scope, method_name)?;
         let function = Function::new(scope, callback)
             .ok_or_else(|| CallbackError::FunctionBinding(method_name.to_string()))?;
-        
+
         object.set(scope, name.into(), function.into());
         Ok(())
     }
 
-    pub fn handle_with_try_catch<F, R>(
-        scope: &mut HandleScope,
-        operation: F,
-    ) -> CallbackResult<R>
+    pub fn handle_with_try_catch<F, R>(scope: &mut HandleScope, operation: F) -> CallbackResult<R>
     where
         F: FnOnce(&mut HandleScope) -> Option<R>,
     {
@@ -347,30 +342,21 @@ impl SerialCallbacks {
 
         let port_object = V8CallbackHelper::create_empty_object(scope);
 
-        if let Err(e) = V8CallbackHelper::bind_method_to_object(
-            scope,
-            port_object,
-            "open",
-            Self::port_open,
-        ) {
+        if let Err(e) =
+            V8CallbackHelper::bind_method_to_object(scope, port_object, "open", Self::port_open)
+        {
             error!("Failed to bind port.open: {}", e);
         }
 
-        if let Err(e) = V8CallbackHelper::bind_method_to_object(
-            scope,
-            port_object,
-            "write",
-            Self::port_write,
-        ) {
+        if let Err(e) =
+            V8CallbackHelper::bind_method_to_object(scope, port_object, "write", Self::port_write)
+        {
             error!("Failed to bind port.write: {}", e);
         }
 
-        if let Err(e) = V8CallbackHelper::bind_method_to_object(
-            scope,
-            port_object,
-            "close",
-            Self::port_close,
-        ) {
+        if let Err(e) =
+            V8CallbackHelper::bind_method_to_object(scope, port_object, "close", Self::port_close)
+        {
             error!("Failed to bind port.close: {}", e);
         }
 
@@ -518,21 +504,15 @@ impl CacheCallbacks {
 
         let cache_object = V8CallbackHelper::create_empty_object(scope);
 
-        if let Err(e) = V8CallbackHelper::bind_method_to_object(
-            scope,
-            cache_object,
-            "add",
-            Self::cache_add,
-        ) {
+        if let Err(e) =
+            V8CallbackHelper::bind_method_to_object(scope, cache_object, "add", Self::cache_add)
+        {
             error!("Failed to bind cache.add: {}", e);
         }
 
-        if let Err(e) = V8CallbackHelper::bind_method_to_object(
-            scope,
-            cache_object,
-            "match",
-            Self::cache_match,
-        ) {
+        if let Err(e) =
+            V8CallbackHelper::bind_method_to_object(scope, cache_object, "match", Self::cache_match)
+        {
             error!("Failed to bind cache.match: {}", e);
         }
 

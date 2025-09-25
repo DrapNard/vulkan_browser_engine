@@ -4,10 +4,10 @@ pub mod process;
 pub mod security;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 pub type ProcessId = u32;
 
@@ -89,7 +89,7 @@ impl SandboxManager {
     pub async fn with_config(config: SandboxConfig) -> Result<Self, SandboxError> {
         let permission_manager = Arc::new(permissions::PermissionManager::new().await?);
         let ipc_manager = Arc::new(ipc::IpcManager::new());
-        
+
         Ok(Self {
             processes: Arc::new(RwLock::new(HashMap::with_capacity(config.initial_capacity))),
             permission_manager,
@@ -100,18 +100,20 @@ impl SandboxManager {
     }
 
     pub async fn create_sandboxed_process(
-        &self, 
-        config: process::ProcessConfig
+        &self,
+        config: process::ProcessConfig,
     ) -> Result<ProcessId, SandboxError> {
         self.validate_process_creation(&config).await?;
-        
+
         let process_id = Self::generate_process_id();
         let sandboxed_process = process::SandboxedProcess::new(process_id, config).await?;
 
         {
             let mut processes = self.processes.write().await;
             if processes.len() >= self.max_processes as usize {
-                return Err(SandboxError::ResourceExhausted("Maximum process count reached".into()));
+                return Err(SandboxError::ResourceExhausted(
+                    "Maximum process count reached".into(),
+                ));
             }
             processes.insert(process_id, sandboxed_process);
         }
@@ -123,7 +125,8 @@ impl SandboxManager {
     pub async fn terminate_process(&self, process_id: ProcessId) -> Result<(), SandboxError> {
         let mut process = {
             let mut processes = self.processes.write().await;
-            processes.remove(&process_id)
+            processes
+                .remove(&process_id)
                 .ok_or(SandboxError::ProcessNotFound(process_id))?
         };
 
@@ -140,22 +143,25 @@ impl SandboxManager {
     }
 
     pub async fn send_message(
-        &self, 
-        from: ProcessId, 
-        to: ProcessId, 
-        message: ipc::IpcMessage
+        &self,
+        from: ProcessId,
+        to: ProcessId,
+        message: ipc::IpcMessage,
     ) -> Result<(), SandboxError> {
         self.validate_process_exists(from).await?;
         self.validate_process_exists(to).await?;
 
         if !self.permission_manager.can_communicate(from, to).await? {
             warn!("IPC communication denied: {} -> {}", from, to);
-            return Err(SandboxError::PermissionDenied(
-                format!("IPC communication not allowed from {} to {}", from, to)
-            ));
+            return Err(SandboxError::PermissionDenied(format!(
+                "IPC communication not allowed from {} to {}",
+                from, to
+            )));
         }
 
-        self.ipc_manager.send_message(from, to, message).await
+        self.ipc_manager
+            .send_message(from, to, message)
+            .await
             .map_err(SandboxError::IpcError)
     }
 
@@ -181,14 +187,15 @@ impl SandboxManager {
         let compliance_status = if violations.is_empty() {
             ComplianceStatus::Compliant
         } else {
-            let critical_violations: Vec<String> = violations.iter()
+            let critical_violations: Vec<String> = violations
+                .iter()
                 .filter(|v| matches!(v.severity, Severity::Critical))
                 .map(|v| v.description.clone())
                 .collect();
-            
+
             if critical_violations.is_empty() {
                 ComplianceStatus::PartiallyCompliant(
-                    violations.iter().map(|v| v.description.clone()).collect()
+                    violations.iter().map(|v| v.description.clone()).collect(),
                 )
             } else {
                 ComplianceStatus::NonCompliant(critical_violations)
@@ -271,10 +278,15 @@ impl SandboxManager {
         NEXT_PROCESS_ID.fetch_add(1, Ordering::SeqCst)
     }
 
-    async fn validate_process_creation(&self, _config: &process::ProcessConfig) -> Result<(), SandboxError> {
+    async fn validate_process_creation(
+        &self,
+        _config: &process::ProcessConfig,
+    ) -> Result<(), SandboxError> {
         let current_count = self.processes.read().await.len();
         if current_count >= self.max_processes as usize {
-            return Err(SandboxError::ResourceExhausted("Process limit reached".into()));
+            return Err(SandboxError::ResourceExhausted(
+                "Process limit reached".into(),
+            ));
         }
 
         Ok(())
@@ -291,7 +303,7 @@ impl SandboxManager {
     async fn check_process_violations(
         &self,
         process_id: ProcessId,
-        stats: &process::ProcessStats
+        stats: &process::ProcessStats,
     ) -> Vec<SecurityViolation> {
         let mut violations = Vec::new();
         let timestamp = std::time::SystemTime::now()
@@ -306,7 +318,9 @@ impl SandboxManager {
                 severity: Severity::High,
                 description: format!(
                     "Process {} exceeds memory limit: {} > {}",
-                    process_id, stats.memory_usage_bytes, self.security_policy.max_memory_per_process
+                    process_id,
+                    stats.memory_usage_bytes,
+                    self.security_policy.max_memory_per_process
                 ),
                 timestamp,
             });
@@ -376,7 +390,7 @@ impl Default for SecurityPolicy {
             ],
             network_isolation: true,
             file_system_restrictions: vec![
-                "/tmp".to_string(), 
+                "/tmp".to_string(),
                 "/var/tmp".to_string(),
                 "/proc/self".to_string(),
             ],
@@ -388,36 +402,35 @@ impl Default for SecurityPolicy {
 pub enum SandboxError {
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
-    
+
     #[error("Process error: {0}")]
     ProcessError(#[from] process::ProcessError),
-    
+
     #[error("IPC error: {0}")]
     IpcError(#[from] ipc::IpcError),
-    
+
     #[error("Permission error: {0}")]
     PermissionError(#[from] permissions::PermissionError),
-    
+
     #[error("Security violation: {0}")]
     SecurityViolation(String),
-    
+
     #[error("Process not found: {0}")]
     ProcessNotFound(ProcessId),
-    
+
     #[error("Resource exhausted: {0}")]
     ResourceExhausted(String),
-    
+
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
-    
+
     #[error("System error: {0}")]
     SystemError(String),
 }
 
 impl Default for SandboxManager {
     fn default() -> Self {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(Self::new())
-        }).expect("Failed to create default SandboxManager")
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(Self::new()))
+            .expect("Failed to create default SandboxManager")
     }
 }

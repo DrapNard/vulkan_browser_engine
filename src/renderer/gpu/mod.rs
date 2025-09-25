@@ -32,7 +32,12 @@ impl GpuContext {
         }
     }
 
-    pub fn create_buffer(&self, size: u64, usage: vk::BufferUsageFlags, memory_location: gpu_allocator::MemoryLocation) -> Result<Buffer, GpuError> {
+    pub fn create_buffer(
+        &self,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+        memory_location: gpu_allocator::MemoryLocation,
+    ) -> Result<Buffer, GpuError> {
         Buffer::new(
             self.device.clone(),
             self.memory_allocator.clone(),
@@ -42,7 +47,13 @@ impl GpuContext {
         )
     }
 
-    pub fn create_texture(&self, width: u32, height: u32, format: vk::Format, usage: vk::ImageUsageFlags) -> Result<Texture, GpuError> {
+    pub fn create_texture(
+        &self,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
+    ) -> Result<Texture, GpuError> {
         Texture::new(
             self.device.clone(),
             self.memory_allocator.clone(),
@@ -69,21 +80,30 @@ impl GpuContext {
         }
     }
 
-    pub fn submit_command_buffer(&self, command_buffer: vk::CommandBuffer, wait_fence: Option<vk::Fence>) -> Result<(), GpuError> {
+    pub fn submit_command_buffer(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        wait_fence: Option<vk::Fence>,
+    ) -> Result<(), GpuError> {
         let command_buffers = [command_buffer];
-        let submit_info = vk::SubmitInfo::builder()
-            .command_buffers(&command_buffers);
+        let submit_info = vk::SubmitInfo::builder().command_buffers(&command_buffers);
 
         unsafe {
             self.device
-                .queue_submit(self.queue, &[submit_info.build()], wait_fence.unwrap_or(vk::Fence::null()))
+                .queue_submit(
+                    self.queue,
+                    &[submit_info.build()],
+                    wait_fence.unwrap_or(vk::Fence::null()),
+                )
                 .map_err(GpuError::VulkanError)
         }
     }
 
     pub fn wait_idle(&self) -> Result<(), GpuError> {
         unsafe {
-            self.device.device_wait_idle().map_err(GpuError::VulkanError)
+            self.device
+                .device_wait_idle()
+                .map_err(GpuError::VulkanError)
         }
     }
 

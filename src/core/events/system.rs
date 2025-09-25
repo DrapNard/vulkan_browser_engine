@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::dom::{NodeId};
+use crate::core::dom::NodeId;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -18,7 +18,7 @@ pub struct EventSystem {
 impl EventSystem {
     pub fn new() -> Self {
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
-        
+
         Self {
             event_queue: Arc::new(RwLock::new(VecDeque::new())),
             global_handlers: Arc::new(RwLock::new(HashMap::new())),
@@ -33,7 +33,9 @@ impl EventSystem {
         let mut propagate = true;
 
         if let Some(target_id) = self.get_event_target(&event) {
-            propagate = self.handle_element_event(target_id, &event_type, &event).await;
+            propagate = self
+                .handle_element_event(target_id, &event_type, &event)
+                .await;
         }
 
         if propagate {
@@ -97,7 +99,12 @@ impl EventSystem {
         }
     }
 
-    async fn handle_element_event(&self, element_id: NodeId, event_type: &str, event: &Event) -> bool {
+    async fn handle_element_event(
+        &self,
+        element_id: NodeId,
+        event_type: &str,
+        event: &Event,
+    ) -> bool {
         let handlers = self.element_handlers.read().await;
         if let Some(element_handlers) = handlers.get(&element_id) {
             if let Some(callbacks) = element_handlers.get(event_type) {

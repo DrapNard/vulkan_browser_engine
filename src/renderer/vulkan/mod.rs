@@ -1,19 +1,19 @@
-use std::sync::Arc;
-use parking_lot::{Mutex, RwLock};
-use ash::{Device, Instance, Entry};
 use ash::vk;
-use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
-use thiserror::Error;
+use ash::{Device, Entry, Instance};
 use dashmap::DashMap;
+use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
+use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
+use std::sync::Arc;
+use thiserror::Error;
 
-pub mod device;
 pub mod command;
+pub mod device;
 pub mod shaders;
 
-use device::{VulkanDevice, DeviceError};
-use command::{CommandManager, CommandError};
-use shaders::{ShaderManager, ShaderError};
+use command::{CommandError, CommandManager};
+use device::{DeviceError, VulkanDevice};
+use shaders::{ShaderError, ShaderManager};
 
 use crate::core::{dom::Document, layout::LayoutEngine};
 use crate::BrowserConfig;
@@ -103,19 +103,25 @@ impl MemoryTracker {
     }
 
     fn allocate(&self, bytes: u64) {
-        let current = self.allocated_bytes.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed) + bytes;
+        let current = self
+            .allocated_bytes
+            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed)
+            + bytes;
         let peak = self.peak_bytes.load(std::sync::atomic::Ordering::Relaxed);
         if current > peak {
-            self.peak_bytes.store(current, std::sync::atomic::Ordering::Relaxed);
+            self.peak_bytes
+                .store(current, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     fn deallocate(&self, bytes: u64) {
-        self.allocated_bytes.fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
+        self.allocated_bytes
+            .fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn current_usage(&self) -> u64 {
-        self.allocated_bytes.load(std::sync::atomic::Ordering::Relaxed)
+        self.allocated_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn peak_usage(&self) -> u64 {
@@ -177,33 +183,35 @@ pub struct VulkanRenderer {
 
 impl VulkanRenderer {
     pub async fn new(config: &BrowserConfig) -> Result<Self> {
-        let entry = unsafe { Entry::load() }
-            .map_err(|e| VulkanError::DeviceCreation(e.to_string()))?;
+        let entry =
+            unsafe { Entry::load() }.map_err(|e| VulkanError::DeviceCreation(e.to_string()))?;
 
         let instance = Self::create_instance(&entry)?;
         let surface = vk::SurfaceKHR::null();
         let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
-        
-        let device = Arc::new(VulkanDevice::new(&entry, &instance, surface, &surface_loader).await?);
-        
+
+        let device =
+            Arc::new(VulkanDevice::new(&entry, &instance, surface, &surface_loader).await?);
+
         let allocator = Self::create_allocator(&instance, &device)?;
-        let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, device.logical_device());
+        let swapchain_loader =
+            ash::extensions::khr::Swapchain::new(&instance, device.logical_device());
         let command_manager = Arc::new(CommandManager::new(device.clone()).await?);
         let shader_manager = Arc::new(ShaderManager::new(device.clone()).await?);
-        
+
         let render_pass = Self::create_render_pass(device.logical_device())?;
         let pipeline_cache = Self::create_pipeline_cache(device.logical_device())?;
         let descriptor_pool = Self::create_descriptor_pool(device.logical_device())?;
-        
+
         let swapchain_data = Arc::new(RwLock::new(SwapchainData {
             swapchain: vk::SwapchainKHR::null(),
             images: Vec::with_capacity(3),
             image_views: Vec::with_capacity(3),
             framebuffers: Vec::with_capacity(3),
             format: vk::Format::B8G8R8A8_SRGB,
-            extent: vk::Extent2D { 
-                width: config.viewport_width.max(1), 
-                height: config.viewport_height.max(1) 
+            extent: vk::Extent2D {
+                width: config.viewport_width.max(1),
+                height: config.viewport_height.max(1),
             },
             current_index: 0,
         }));
@@ -230,7 +238,10 @@ impl VulkanRenderer {
         })
     }
 
-    fn create_allocator(instance: &Instance, device: &Arc<VulkanDevice>) -> Result<Arc<Mutex<Allocator>>> {
+    fn create_allocator(
+        instance: &Instance,
+        device: &Arc<VulkanDevice>,
+    ) -> Result<Arc<Mutex<Allocator>>> {
         let allocator_desc = AllocatorCreateDesc {
             instance: instance.clone(),
             device: device.logical_device().clone(),
@@ -246,10 +257,10 @@ impl VulkanRenderer {
             buffer_device_address: device.capabilities().supports_timeline_semaphores,
             allocation_sizes: gpu_allocator::AllocationSizes::default(),
         };
-        
+
         let allocator = Allocator::new(&allocator_desc)
             .map_err(|e| VulkanError::MemoryAllocation(e.to_string()))?;
-            
+
         Ok(Arc::new(Mutex::new(allocator)))
     }
 
@@ -261,17 +272,13 @@ impl VulkanRenderer {
             .engine_version(vk::make_api_version(0, 1, 0, 0))
             .api_version(vk::API_VERSION_1_3);
 
-        let mut extension_names = vec![
-            ash::extensions::khr::Surface::name().as_ptr(),
-        ];
+        let mut extension_names = vec![ash::extensions::khr::Surface::name().as_ptr()];
 
         let mut layer_names = Vec::new();
 
         if cfg!(debug_assertions) {
             extension_names.push(ash::extensions::ext::DebugUtils::name().as_ptr());
-            layer_names.push(unsafe { 
-                c"VK_LAYER_KHRONOS_validation".as_ptr() 
-            });
+            layer_names.push(unsafe { c"VK_LAYER_KHRONOS_validation".as_ptr() });
         }
 
         let create_info = vk::InstanceCreateInfo::builder()
@@ -280,7 +287,8 @@ impl VulkanRenderer {
             .enabled_layer_names(&layer_names);
 
         unsafe {
-            entry.create_instance(&create_info, None)
+            entry
+                .create_instance(&create_info, None)
                 .map_err(|e| VulkanError::DeviceCreation(e.to_string()))
         }
     }
@@ -318,7 +326,7 @@ impl VulkanRenderer {
             .attachment(1)
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
             .build();
-        
+
         let subpasses = [vk::SubpassDescription::builder()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .color_attachments(&color_attachment_refs)
@@ -328,10 +336,19 @@ impl VulkanRenderer {
         let dependencies = [vk::SubpassDependency::builder()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
             .src_access_mask(vk::AccessFlags::empty())
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            )
             .build()];
 
         let render_pass_info = vk::RenderPassCreateInfo::builder()
@@ -340,16 +357,18 @@ impl VulkanRenderer {
             .dependencies(&dependencies);
 
         unsafe {
-            device.create_render_pass(&render_pass_info, None)
+            device
+                .create_render_pass(&render_pass_info, None)
                 .map_err(|e| VulkanError::PipelineCreation(e.to_string()))
         }
     }
 
     fn create_pipeline_cache(device: &Device) -> Result<vk::PipelineCache> {
         let cache_info = vk::PipelineCacheCreateInfo::builder();
-        
+
         unsafe {
-            device.create_pipeline_cache(&cache_info, None)
+            device
+                .create_pipeline_cache(&cache_info, None)
                 .map_err(|e| VulkanError::PipelineCreation(e.to_string()))
         }
     }
@@ -376,54 +395,57 @@ impl VulkanRenderer {
             .pool_sizes(&pool_sizes);
 
         unsafe {
-            device.create_descriptor_pool(&pool_info, None)
+            device
+                .create_descriptor_pool(&pool_info, None)
                 .map_err(|e| VulkanError::PipelineCreation(e.to_string()))
         }
     }
 
     pub async fn render(&self, document: &Document, layout_engine: &LayoutEngine) -> Result<()> {
         let frame_start = std::time::Instant::now();
-        
+
         let swapchain_data = self.swapchain_data.read();
         if swapchain_data.swapchain == vk::SwapchainKHR::null() {
             return Ok(());
         }
-        
+
         let image_index = self.acquire_next_image(&swapchain_data)?;
         let command_buffer = self.command_manager.begin_frame().await?;
-        
+
         self.begin_render_pass(command_buffer, &swapchain_data, image_index)?;
-        
+
         let mut stats = RenderStats::default();
         {
             let mut batch = self.command_batches.write();
             batch.clear();
-            
-            self.build_render_commands(document, layout_engine, &mut batch).await?;
+
+            self.build_render_commands(document, layout_engine, &mut batch)
+                .await?;
             stats.draw_calls = batch.len() as u32;
-            
+
             for command in batch.iter() {
                 self.execute_render_command(command_buffer, command, &mut stats)?;
             }
         }
-        
+
         self.end_render_pass(command_buffer)?;
         self.command_manager.end_frame(command_buffer).await?;
         self.present_frame(&swapchain_data, image_index)?;
-        
+
         stats.frame_time_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
         stats.memory_used_mb = (self.get_memory_usage().await / (1024 * 1024)) as u32;
         *self.stats.write() = stats;
-        
-        self.frame_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        self.frame_index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     async fn build_render_commands(
-        &self, 
-        _document: &Document, 
-        _layout_engine: &LayoutEngine, 
-        _batch: &mut Vec<RenderCommand>
+        &self,
+        _document: &Document,
+        _layout_engine: &LayoutEngine,
+        _batch: &mut Vec<RenderCommand>,
     ) -> Result<()> {
         Ok(())
     }
@@ -436,16 +458,17 @@ impl VulkanRenderer {
                 vk::Semaphore::null(),
                 vk::Fence::null(),
             )
-        }.map_err(|e| VulkanError::SwapchainCreation(e.to_string()))?;
-        
+        }
+        .map_err(|e| VulkanError::SwapchainCreation(e.to_string()))?;
+
         Ok(image_index)
     }
 
     fn begin_render_pass(
-        &self, 
-        command_buffer: vk::CommandBuffer, 
-        swapchain_data: &SwapchainData, 
-        image_index: u32
+        &self,
+        command_buffer: vk::CommandBuffer,
+        swapchain_data: &SwapchainData,
+        image_index: u32,
     ) -> Result<()> {
         let clear_values = [
             vk::ClearValue {
@@ -482,10 +505,10 @@ impl VulkanRenderer {
     }
 
     fn execute_render_command(
-        &self, 
-        command_buffer: vk::CommandBuffer, 
-        command: &RenderCommand, 
-        stats: &mut RenderStats
+        &self,
+        command_buffer: vk::CommandBuffer,
+        command: &RenderCommand,
+        stats: &mut RenderStats,
     ) -> Result<()> {
         if let Some(pipeline) = self.resources.pipelines.get(&command.pipeline_id) {
             unsafe {
@@ -540,7 +563,9 @@ impl VulkanRenderer {
 
     fn end_render_pass(&self, command_buffer: vk::CommandBuffer) -> Result<()> {
         unsafe {
-            self.device.logical_device().cmd_end_render_pass(command_buffer);
+            self.device
+                .logical_device()
+                .cmd_end_render_pass(command_buffer);
         }
         Ok(())
     }
@@ -554,7 +579,8 @@ impl VulkanRenderer {
             .image_indices(&image_indices);
 
         unsafe {
-            self.swapchain_loader.queue_present(self.device.graphics_queue(), &present_info)
+            self.swapchain_loader
+                .queue_present(self.device.graphics_queue(), &present_info)
                 .map_err(|e| VulkanError::SwapchainCreation(e.to_string()))?;
         }
 
@@ -563,11 +589,11 @@ impl VulkanRenderer {
 
     pub async fn resize_surface(&self, width: u32, height: u32) -> Result<()> {
         self.device.wait_idle().await?;
-        
+
         let mut swapchain_data = self.swapchain_data.write();
         swapchain_data.extent.width = width.max(1);
         swapchain_data.extent.height = height.max(1);
-        
+
         Ok(())
     }
 
@@ -598,14 +624,20 @@ impl VulkanRenderer {
 
         unsafe {
             self.resources.cleanup(self.device.logical_device());
-            self.device.logical_device().destroy_descriptor_pool(self.descriptor_pool, None);
-            self.device.logical_device().destroy_pipeline_cache(self.pipeline_cache, None);
-            self.device.logical_device().destroy_render_pass(self.render_pass, None);
-            
+            self.device
+                .logical_device()
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device
+                .logical_device()
+                .destroy_pipeline_cache(self.pipeline_cache, None);
+            self.device
+                .logical_device()
+                .destroy_render_pass(self.render_pass, None);
+
             if self.surface != vk::SurfaceKHR::null() {
                 self.surface_loader.destroy_surface(self.surface, None);
             }
-            
+
             self.instance.destroy_instance(None);
         }
 
@@ -613,7 +645,10 @@ impl VulkanRenderer {
     }
 
     pub fn get_pipeline(&self, id: u64) -> Option<vk::Pipeline> {
-        self.resources.pipelines.get(&id).map(|entry| *entry.value())
+        self.resources
+            .pipelines
+            .get(&id)
+            .map(|entry| *entry.value())
     }
 
     pub fn register_pipeline(&self, id: u64, pipeline: vk::Pipeline) {

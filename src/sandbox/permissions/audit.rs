@@ -1,11 +1,11 @@
 use super::{Capability, ProcessPermissions, ResourceLimits, ResourceUsage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{RwLock, mpsc, Notify};
+use tokio::sync::{mpsc, Notify, RwLock};
 use tracing::log;
 
 pub struct SecurityAuditor {
@@ -153,7 +153,7 @@ impl<T> CircularBuffer<T> {
         } else {
             0
         };
-        
+
         CircularBufferIterator {
             buffer: &self.buffer,
             start,
@@ -217,8 +217,11 @@ impl AtomicMetrics {
             active_processes: AtomicU32::new(0),
             high_risk_processes: AtomicU32::new(0),
             severity_counters: [
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
             ],
             process_counters: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -250,7 +253,7 @@ impl AtomicMetrics {
 
     async fn to_security_metrics(&self) -> SecurityMetrics {
         let process_counters = self.process_counters.read().await;
-        
+
         SecurityMetrics {
             total_events: self.total_events.load(Ordering::Relaxed),
             security_violations: self.security_violations.load(Ordering::Relaxed),
@@ -259,12 +262,29 @@ impl AtomicMetrics {
             active_processes: self.active_processes.load(Ordering::Relaxed),
             high_risk_processes: self.high_risk_processes.load(Ordering::Relaxed),
             events_by_severity: [
-                (SeverityLevel::Critical, self.severity_counters[0].load(Ordering::Relaxed)),
-                (SeverityLevel::High, self.severity_counters[1].load(Ordering::Relaxed)),
-                (SeverityLevel::Medium, self.severity_counters[2].load(Ordering::Relaxed)),
-                (SeverityLevel::Low, self.severity_counters[3].load(Ordering::Relaxed)),
-                (SeverityLevel::Info, self.severity_counters[4].load(Ordering::Relaxed)),
-            ].into_iter().collect(),
+                (
+                    SeverityLevel::Critical,
+                    self.severity_counters[0].load(Ordering::Relaxed),
+                ),
+                (
+                    SeverityLevel::High,
+                    self.severity_counters[1].load(Ordering::Relaxed),
+                ),
+                (
+                    SeverityLevel::Medium,
+                    self.severity_counters[2].load(Ordering::Relaxed),
+                ),
+                (
+                    SeverityLevel::Low,
+                    self.severity_counters[3].load(Ordering::Relaxed),
+                ),
+                (
+                    SeverityLevel::Info,
+                    self.severity_counters[4].load(Ordering::Relaxed),
+                ),
+            ]
+            .into_iter()
+            .collect(),
             events_by_process: process_counters
                 .iter()
                 .map(|(pid, counter)| (*pid, counter.load(Ordering::Relaxed)))
@@ -309,10 +329,16 @@ impl FileWriter {
             }
         });
 
-        Self { sender, file_handle }
+        Self {
+            sender,
+            file_handle,
+        }
     }
 
-    async fn flush_batch(file_handle: &Arc<tokio::sync::Mutex<Option<tokio::fs::File>>>, batch: &mut Vec<String>) {
+    async fn flush_batch(
+        file_handle: &Arc<tokio::sync::Mutex<Option<tokio::fs::File>>>,
+        batch: &mut Vec<String>,
+    ) {
         if let Some(file) = file_handle.lock().await.as_mut() {
             let combined = batch.join("\n") + "\n";
             if let Err(e) = file.write_all(combined.as_bytes()).await {
@@ -371,7 +397,7 @@ impl SecurityAuditor {
                             Some(audit_event) => {
                                 buffer_clone.write().await.push(audit_event.clone());
                                 metrics_clone.increment_event(&audit_event).await;
-                                
+
                                 let json_line = serde_json::to_string(&audit_event)
                                     .unwrap_or_else(|_| "SERIALIZATION_ERROR".to_string());
                                 file_writer_clone.write_line(json_line).await;
@@ -397,7 +423,8 @@ impl SecurityAuditor {
     }
 
     pub async fn log_permission_grant(&self, process_id: u32, permissions: &ProcessPermissions) {
-        let capabilities_str = permissions.capabilities
+        let capabilities_str = permissions
+            .capabilities
             .iter()
             .map(|c| format!("{:?}", c))
             .collect::<Vec<_>>()
@@ -410,8 +437,14 @@ impl SecurityAuditor {
             severity: SeverityLevel::Info,
             details: format!("Granted capabilities: {}", capabilities_str),
             metadata: self.create_metadata(&[
-                ("capabilities_count", &permissions.capabilities.len().to_string()),
-                ("memory_limit", &permissions.resource_limits.max_memory_bytes.to_string()),
+                (
+                    "capabilities_count",
+                    &permissions.capabilities.len().to_string(),
+                ),
+                (
+                    "memory_limit",
+                    &permissions.resource_limits.max_memory_bytes.to_string(),
+                ),
             ]),
         };
 
@@ -431,13 +464,30 @@ impl SecurityAuditor {
         self.record_event(event).await;
     }
 
-    pub async fn log_permission_check(&self, process_id: u32, capability: &Capability, granted: bool) {
+    pub async fn log_permission_check(
+        &self,
+        process_id: u32,
+        capability: &Capability,
+        granted: bool,
+    ) {
         let event = AuditEvent {
             timestamp: self.current_timestamp(),
             process_id,
-            event_type: if granted { AuditEventType::PermissionCheck } else { AuditEventType::PermissionDenied },
-            severity: if granted { SeverityLevel::Low } else { SeverityLevel::Medium },
-            details: format!("Permission check for {:?}: {}", capability, if granted { "GRANTED" } else { "DENIED" }),
+            event_type: if granted {
+                AuditEventType::PermissionCheck
+            } else {
+                AuditEventType::PermissionDenied
+            },
+            severity: if granted {
+                SeverityLevel::Low
+            } else {
+                SeverityLevel::Medium
+            },
+            details: format!(
+                "Permission check for {:?}: {}",
+                capability,
+                if granted { "GRANTED" } else { "DENIED" }
+            ),
             metadata: self.create_metadata(&[
                 ("capability", &format!("{:?}", capability)),
                 ("result", if granted { "granted" } else { "denied" }),
@@ -447,9 +497,14 @@ impl SecurityAuditor {
         self.record_event(event).await;
     }
 
-    pub async fn log_resource_violation(&self, process_id: u32, usage: &ResourceUsage, limits: &ResourceLimits) {
+    pub async fn log_resource_violation(
+        &self,
+        process_id: u32,
+        usage: &ResourceUsage,
+        limits: &ResourceLimits,
+    ) {
         let violations = self.identify_violations(usage, limits);
-        
+
         let event = AuditEvent {
             timestamp: self.current_timestamp(),
             process_id,
@@ -467,7 +522,12 @@ impl SecurityAuditor {
         self.record_event(event).await;
     }
 
-    pub async fn log_security_violation(&self, process_id: u32, violation_type: &str, details: &str) {
+    pub async fn log_security_violation(
+        &self,
+        process_id: u32,
+        violation_type: &str,
+        details: &str,
+    ) {
         let event = AuditEvent {
             timestamp: self.current_timestamp(),
             process_id,
@@ -533,15 +593,17 @@ impl SecurityAuditor {
     async fn get_recent_violations(&self) -> Vec<AuditEvent> {
         let buffer = self.event_buffer.read().await;
         let cutoff_time = self.current_timestamp() - (24 * 60 * 60 * 1000);
-        
-        buffer.iter()
+
+        buffer
+            .iter()
             .filter(|event| {
-                event.timestamp > cutoff_time && 
-                matches!(event.event_type, 
-                    AuditEventType::SecurityViolation | 
-                    AuditEventType::ResourceViolation |
-                    AuditEventType::PermissionDenied
-                )
+                event.timestamp > cutoff_time
+                    && matches!(
+                        event.event_type,
+                        AuditEventType::SecurityViolation
+                            | AuditEventType::ResourceViolation
+                            | AuditEventType::PermissionDenied
+                    )
             })
             .cloned()
             .collect()
@@ -550,18 +612,23 @@ impl SecurityAuditor {
     async fn assess_risk(&self, metrics: &SecurityMetrics) -> RiskAssessment {
         let mut process_risk_scores = HashMap::new();
         let mut threat_indicators = Vec::new();
-        
+
         for (process_id, event_count) in &metrics.events_by_process {
-            if *event_count == 0 { continue; }
-            
+            if *event_count == 0 {
+                continue;
+            }
+
             let violation_count = self.count_process_violations(*process_id).await;
             let risk_score = (violation_count as f64 / *event_count as f64) * 100.0;
             process_risk_scores.insert(*process_id, risk_score);
-            
+
             if risk_score > 20.0 {
                 threat_indicators.push(ThreatIndicator {
                     indicator_type: "High violation rate".to_string(),
-                    description: format!("Process {} has {:.1}% violation rate", process_id, risk_score),
+                    description: format!(
+                        "Process {} has {:.1}% violation rate",
+                        process_id, risk_score
+                    ),
                     confidence: (risk_score / 100.0).min(1.0),
                     first_seen: self.current_timestamp() - 86400000,
                     last_seen: self.current_timestamp(),
@@ -586,13 +653,23 @@ impl SecurityAuditor {
 
     async fn count_process_violations(&self, process_id: u32) -> u32 {
         let buffer = self.event_buffer.read().await;
-        buffer.iter()
-            .filter(|e| e.process_id == process_id && 
-                matches!(e.event_type, AuditEventType::SecurityViolation | AuditEventType::ResourceViolation))
+        buffer
+            .iter()
+            .filter(|e| {
+                e.process_id == process_id
+                    && matches!(
+                        e.event_type,
+                        AuditEventType::SecurityViolation | AuditEventType::ResourceViolation
+                    )
+            })
             .count() as u32
     }
 
-    fn generate_recommendations(&self, metrics: &SecurityMetrics, risk: &RiskAssessment) -> Vec<String> {
+    fn generate_recommendations(
+        &self,
+        metrics: &SecurityMetrics,
+        risk: &RiskAssessment,
+    ) -> Vec<String> {
         let mut recommendations = Vec::new();
 
         if metrics.security_violations > 5 {
@@ -609,7 +686,10 @@ impl SecurityAuditor {
 
         for (process_id, score) in &risk.process_risk_scores {
             if *score > 30.0 {
-                recommendations.push(format!("Investigate process {} for potential security issues", process_id));
+                recommendations.push(format!(
+                    "Investigate process {} for potential security issues",
+                    process_id
+                ));
             }
         }
 
@@ -624,15 +704,24 @@ impl SecurityAuditor {
         let mut violations = Vec::new();
 
         if usage.memory_bytes > limits.max_memory_bytes {
-            violations.push(format!("Memory: {} > {}", usage.memory_bytes, limits.max_memory_bytes));
+            violations.push(format!(
+                "Memory: {} > {}",
+                usage.memory_bytes, limits.max_memory_bytes
+            ));
         }
 
         if usage.cpu_percent > limits.max_cpu_percent {
-            violations.push(format!("CPU: {}% > {}%", usage.cpu_percent, limits.max_cpu_percent));
+            violations.push(format!(
+                "CPU: {}% > {}%",
+                usage.cpu_percent, limits.max_cpu_percent
+            ));
         }
 
         if usage.file_descriptors > limits.max_file_descriptors {
-            violations.push(format!("File descriptors: {} > {}", usage.file_descriptors, limits.max_file_descriptors));
+            violations.push(format!(
+                "File descriptors: {} > {}",
+                usage.file_descriptors, limits.max_file_descriptors
+            ));
         }
 
         violations
@@ -646,20 +735,26 @@ impl SecurityAuditor {
     }
 
     fn create_metadata(&self, pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter()
+        pairs
+            .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
 
-    pub async fn get_audit_events(&self, process_id: Option<u32>, limit: Option<usize>) -> Vec<AuditEvent> {
+    pub async fn get_audit_events(
+        &self,
+        process_id: Option<u32>,
+        limit: Option<usize>,
+    ) -> Vec<AuditEvent> {
         let buffer = self.event_buffer.read().await;
-        let filtered: Vec<AuditEvent> = buffer.iter()
+        let filtered: Vec<AuditEvent> = buffer
+            .iter()
             .filter(|event| process_id.map_or(true, |pid| event.process_id == pid))
             .rev()
             .take(limit.unwrap_or(100))
             .cloned()
             .collect();
-        
+
         filtered
     }
 

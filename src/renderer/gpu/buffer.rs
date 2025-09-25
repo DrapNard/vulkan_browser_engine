@@ -64,7 +64,7 @@ impl Buffer {
 
     pub fn write_data<T: Copy>(&mut self, data: &[T]) -> Result<(), GpuError> {
         let byte_size = std::mem::size_of_val(data);
-        
+
         if byte_size as u64 > self.size {
             return Err(GpuError::BufferCreationFailed);
         }
@@ -89,7 +89,7 @@ impl Buffer {
 
     pub fn read_data<T: Copy>(&self, data: &mut [T]) -> Result<(), GpuError> {
         let byte_size = std::mem::size_of_val(data);
-        
+
         if byte_size as u64 > self.size {
             return Err(GpuError::BufferCreationFailed);
         }
@@ -112,9 +112,13 @@ impl Buffer {
         }
     }
 
-    pub fn write_data_at_offset<T: Copy>(&mut self, data: &[T], offset: u64) -> Result<(), GpuError> {
+    pub fn write_data_at_offset<T: Copy>(
+        &mut self,
+        data: &[T],
+        offset: u64,
+    ) -> Result<(), GpuError> {
         let byte_size = std::mem::size_of_val(data);
-        
+
         if offset + byte_size as u64 > self.size {
             return Err(GpuError::BufferCreationFailed);
         }
@@ -123,11 +127,7 @@ impl Buffer {
             if let Some(mapped_ptr) = allocation.mapped_ptr() {
                 unsafe {
                     let dst_ptr = (mapped_ptr.as_ptr() as *mut u8).add(offset as usize);
-                    std::ptr::copy_nonoverlapping(
-                        data.as_ptr() as *const u8,
-                        dst_ptr,
-                        byte_size,
-                    );
+                    std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, dst_ptr, byte_size);
                 }
                 Ok(())
             } else {
@@ -194,18 +194,17 @@ impl Buffer {
         dst_offset: u64,
         size: Option<u64>,
     ) -> Result<(), GpuError> {
-        let copy_size = size.unwrap_or_else(|| {
-            (self.size - src_offset).min(dst_buffer.size - dst_offset)
-        });
-        
+        let copy_size =
+            size.unwrap_or_else(|| (self.size - src_offset).min(dst_buffer.size - dst_offset));
+
         if src_offset + copy_size > self.size {
             return Err(GpuError::BufferCreationFailed);
         }
-        
+
         if dst_offset + copy_size > dst_buffer.size {
             return Err(GpuError::BufferCreationFailed);
         }
-        
+
         let copy_region = vk::BufferCopy::builder()
             .src_offset(src_offset)
             .dst_offset(dst_offset)
@@ -256,18 +255,21 @@ impl Buffer {
     }
 
     pub fn get_device_address(&self) -> Result<vk::DeviceAddress, GpuError> {
-        let buffer_device_address_info = vk::BufferDeviceAddressInfo::builder()
-            .buffer(self.buffer);
+        let buffer_device_address_info = vk::BufferDeviceAddressInfo::builder().buffer(self.buffer);
 
         unsafe {
-            Ok(self.device.get_buffer_device_address(&buffer_device_address_info))
+            Ok(self
+                .device
+                .get_buffer_device_address(&buffer_device_address_info))
         }
     }
 
-    pub fn get_allocation_info(&self) -> Option<(vk::DeviceMemory, vk::DeviceSize, vk::DeviceSize)> {
-        self.allocation.as_ref().map(|alloc| unsafe {
-            (alloc.memory(), alloc.offset(), alloc.size())
-        })
+    pub fn get_allocation_info(
+        &self,
+    ) -> Option<(vk::DeviceMemory, vk::DeviceSize, vk::DeviceSize)> {
+        self.allocation
+            .as_ref()
+            .map(|alloc| unsafe { (alloc.memory(), alloc.offset(), alloc.size()) })
     }
 }
 
@@ -277,7 +279,7 @@ impl Drop for Buffer {
             let mut allocator_guard = self.allocator.lock().unwrap();
             let _ = allocator_guard.free(allocation);
         }
-        
+
         unsafe {
             self.device.destroy_buffer(self.buffer, None);
         }

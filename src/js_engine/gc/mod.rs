@@ -2,7 +2,7 @@ pub mod heap;
 
 pub use heap::*;
 
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::log;
@@ -44,14 +44,14 @@ impl GarbageCollector {
         let mut heap = self.heap.write().await;
         let size = object.size();
         let id = heap.allocate(Box::new(object));
-        
+
         self.allocation_count += size;
-        
+
         if self.allocation_count > self.collection_threshold {
             drop(heap);
             self.collect().await;
         }
-        
+
         id
     }
 
@@ -67,10 +67,10 @@ impl GarbageCollector {
 
     pub async fn collect(&mut self) {
         let start_time = std::time::Instant::now();
-        
+
         let roots = self.roots.read().await.clone();
         let mut heap = self.heap.write().await;
-        
+
         let mut marker = GcMarker {
             marked: HashSet::new(),
             mark_stack: Vec::new(),
@@ -84,11 +84,15 @@ impl GarbageCollector {
         }
 
         let freed_bytes = self.sweep_phase(&mut marker, &mut heap).await;
-        
+
         self.allocation_count = self.allocation_count.saturating_sub(freed_bytes);
-        
+
         let duration = start_time.elapsed();
-        log::info!("GC completed in {:?}, freed {} bytes", duration, freed_bytes);
+        log::info!(
+            "GC completed in {:?}, freed {} bytes",
+            duration,
+            freed_bytes
+        );
     }
 
     async fn mark_phase(&self, marker: &mut GcMarker, heap: &Heap) {

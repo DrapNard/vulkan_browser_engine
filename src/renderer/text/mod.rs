@@ -48,7 +48,7 @@ impl TextRenderer {
     pub async fn new(gpu_context: Arc<GpuContext>) -> Result<Self, TextError> {
         let font_atlas = FontAtlas::new(512, 512)?;
         let mut fonts = HashMap::new();
-        
+
         // Try to load system default font, fallback to a minimal font if needed
         if let Some(default_font) = Self::load_system_font() {
             fonts.insert("default".to_string(), default_font);
@@ -102,7 +102,7 @@ impl TextRenderer {
     pub async fn load_font(&mut self, name: &str, font_data: Vec<u8>) -> Result<(), TextError> {
         let font = Font::try_from_vec(font_data)
             .ok_or_else(|| TextError::FontLoadError(format!("Failed to load font: {}", name)))?;
-        
+
         self.fonts.insert(name.to_string(), font);
         Ok(())
     }
@@ -118,7 +118,9 @@ impl TextRenderer {
     ) -> Result<(), TextError> {
         let font_name = font_family.as_deref().unwrap_or("default");
         let font = {
-            let font_ref = self.fonts.get(font_name)
+            let font_ref = self
+                .fonts
+                .get(font_name)
                 .ok_or_else(|| TextError::FontNotFound(font_name.to_string()))?;
             font_ref.clone()
         };
@@ -134,7 +136,8 @@ impl TextRenderer {
         }
 
         self.update_vertex_buffer(&vertices).await?;
-        self.draw_text_vertices(command_buffer, vertices.len()).await?;
+        self.draw_text_vertices(command_buffer, vertices.len())
+            .await?;
 
         Ok(())
     }
@@ -166,20 +169,22 @@ impl TextRenderer {
 
             // Get the base glyph
             let base_glyph = font.glyph(character);
-            
+
             // Clone glyph before scaling to avoid move issues
             let glyph_for_atlas = base_glyph.clone();
             let glyph_for_scaling = base_glyph.clone();
-            
+
             // Scale and position for metrics and layout
             let scaled_glyph = glyph_for_scaling.scaled(scale);
             let h_metrics = scaled_glyph.h_metrics();
             let positioned_glyph = scaled_glyph.positioned(rusttype::point(x, y));
             let bounding_box = positioned_glyph.pixel_bounding_box();
-            
+
             // Now cache in atlas (this requires mutable borrow of self)
-            let _atlas_coords = self.font_atlas.get_or_cache_glyph(character, &glyph_for_atlas, scale)?;
-            
+            let _atlas_coords =
+                self.font_atlas
+                    .get_or_cache_glyph(character, &glyph_for_atlas, scale)?;
+
             let (glyph_x, glyph_y, glyph_width, glyph_height) = if let Some(bb) = bounding_box {
                 (
                     bb.min.x as f32,
@@ -190,7 +195,7 @@ impl TextRenderer {
             } else {
                 (x, y, 0.0, 0.0)
             };
-            
+
             glyphs.push(GlyphInfo {
                 character,
                 x: glyph_x,
@@ -214,7 +219,11 @@ impl TextRenderer {
         Ok(glyphs)
     }
 
-    fn create_text_vertices(&self, glyphs: &[GlyphInfo], color: [f32; 4]) -> Result<Vec<TextVertex>, TextError> {
+    fn create_text_vertices(
+        &self,
+        glyphs: &[GlyphInfo],
+        color: [f32; 4],
+    ) -> Result<Vec<TextVertex>, TextError> {
         let mut vertices = Vec::new();
 
         for glyph in glyphs {
@@ -222,7 +231,9 @@ impl TextRenderer {
                 continue; // Skip whitespace characters
             }
 
-            let atlas_coords = self.font_atlas.get_glyph_coords(glyph.character)
+            let atlas_coords = self
+                .font_atlas
+                .get_glyph_coords(glyph.character)
                 .ok_or(TextError::GlyphNotFound(glyph.character))?;
 
             let quad_vertices = [
@@ -257,14 +268,13 @@ impl TextRenderer {
     async fn update_vertex_buffer(&mut self, vertices: &[TextVertex]) -> Result<(), TextError> {
         let buffer_size = std::mem::size_of_val(vertices) as u64;
 
-        if self.vertex_buffer.is_none() || self.vertex_buffer.as_ref().unwrap().size() < buffer_size {
-            self.vertex_buffer = Some(
-                self.gpu_context.create_buffer(
-                    buffer_size,
-                    vk::BufferUsageFlags::VERTEX_BUFFER,
-                    gpu_allocator::MemoryLocation::CpuToGpu,
-                )?
-            );
+        if self.vertex_buffer.is_none() || self.vertex_buffer.as_ref().unwrap().size() < buffer_size
+        {
+            self.vertex_buffer = Some(self.gpu_context.create_buffer(
+                buffer_size,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                gpu_allocator::MemoryLocation::CpuToGpu,
+            )?);
         }
 
         if let Some(ref mut buffer) = self.vertex_buffer {
@@ -274,7 +284,11 @@ impl TextRenderer {
         Ok(())
     }
 
-    async fn draw_text_vertices(&self, command_buffer: &vk::CommandBuffer, vertex_count: usize) -> Result<(), TextError> {
+    async fn draw_text_vertices(
+        &self,
+        command_buffer: &vk::CommandBuffer,
+        vertex_count: usize,
+    ) -> Result<(), TextError> {
         if let Some(ref vertex_buffer) = self.vertex_buffer {
             let vertex_buffers = [vertex_buffer.get_buffer()];
             let offsets = [0];
@@ -318,7 +332,9 @@ impl TextRenderer {
         font_size: f32,
     ) -> Result<(f32, f32), TextError> {
         let font_name = font_family.as_deref().unwrap_or("default");
-        let font = self.fonts.get(font_name)
+        let font = self
+            .fonts
+            .get(font_name)
             .ok_or_else(|| TextError::FontNotFound(font_name.to_string()))?;
 
         let scale = Scale::uniform(font_size);

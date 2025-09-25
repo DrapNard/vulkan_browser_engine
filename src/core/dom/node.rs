@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::document::NodeId;
 
@@ -132,7 +132,10 @@ impl ComputedStyle {
     }
 
     pub fn get_property(&self, name: &str) -> Option<&String> {
-        self.properties.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+        self.properties
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v)
     }
 
     pub fn set_property(&mut self, name: String, value: String) {
@@ -312,15 +315,14 @@ impl LayoutData {
     }
 
     pub fn contains_point(&self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width &&
-        y >= self.y && y <= self.y + self.height
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
     }
 
     pub fn intersects(&self, other: &LayoutData) -> bool {
-        !(self.x + self.width < other.x ||
-          other.x + other.width < self.x ||
-          self.y + self.height < other.y ||
-          other.y + other.height < self.y)
+        !(self.x + self.width < other.x
+            || other.x + other.width < self.x
+            || self.y + self.height < other.y
+            || other.y + other.height < self.y)
     }
 
     pub fn mark_dirty(&mut self) {
@@ -631,7 +633,7 @@ impl Node {
     pub fn is_text(&self) -> bool {
         self.node_type == NodeType::Text
     }
-    
+
     pub fn is_comment(&self) -> bool {
         self.node_type == NodeType::Comment
     }
@@ -697,15 +699,19 @@ impl Node {
     }
 
     pub fn get_custom_data<T: std::any::Any + Send + Sync>(&self, key: &str) -> Option<&T> {
-        self.custom_data.get(key).and_then(|b| b.downcast_ref::<T>())
+        self.custom_data
+            .get(key)
+            .and_then(|b| b.downcast_ref::<T>())
     }
 
-    pub fn remove_custom_data(&mut self, key: &str) -> Option<Box<dyn std::any::Any + Send + Sync>> {
+    pub fn remove_custom_data(
+        &mut self,
+        key: &str,
+    ) -> Option<Box<dyn std::any::Any + Send + Sync>> {
         self.custom_data.remove(key)
     }
 
     pub fn clone_node(&self, deep: bool) -> Self {
-        
         Self {
             node_id: NodeId::new(),
             node_type: self.node_type,
@@ -714,7 +720,11 @@ impl Node {
             attributes: self.attributes.clone(),
             computed_style: Arc::new(RwLock::new(ComputedStyle::new())),
             layout_data: Arc::new(RwLock::new(LayoutData::default())),
-            event_listeners: if deep { Vec::new().into_iter().collect() } else { self.event_listeners.clone() },
+            event_listeners: if deep {
+                Vec::new().into_iter().collect()
+            } else {
+                self.event_listeners.clone()
+            },
             custom_data: HashMap::new(),
             namespace_uri: self.namespace_uri.clone(),
             prefix: self.prefix.clone(),
@@ -732,8 +742,10 @@ impl Node {
         size += self.text_content.capacity();
         size += self.attributes.map.capacity() * std::mem::size_of::<(String, String)>();
         size += self.attributes.namespace_map.capacity() * std::mem::size_of::<(String, String)>();
-        size += self.event_listeners.capacity() * std::mem::size_of::<Vec<Arc<dyn Fn() + Send + Sync>>>();
-        size += self.custom_data.capacity() * std::mem::size_of::<Box<dyn std::any::Any + Send + Sync>>();
+        size += self.event_listeners.capacity()
+            * std::mem::size_of::<Vec<Arc<dyn Fn() + Send + Sync>>>();
+        size += self.custom_data.capacity()
+            * std::mem::size_of::<Box<dyn std::any::Any + Send + Sync>>();
         for (k, v) in &self.attributes.map {
             size += k.capacity() + v.capacity();
         }
@@ -755,7 +767,10 @@ impl std::fmt::Debug for Node {
             .field("computed_style", &"<ComputedStyle>")
             .field("layout_data", &"<LayoutData>")
             .field("event_listeners_count", &self.event_listeners.len())
-            .field("custom_data_keys", &self.custom_data.keys().collect::<Vec<_>>())
+            .field(
+                "custom_data_keys",
+                &self.custom_data.keys().collect::<Vec<_>>(),
+            )
             .field("namespace_uri", &self.namespace_uri)
             .field("prefix", &self.prefix)
             .field("base_uri", &self.base_uri)

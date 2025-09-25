@@ -1,4 +1,4 @@
-use std::path::{Path};
+use std::path::Path;
 use url::Url;
 
 pub struct ModuleResolver {
@@ -50,7 +50,11 @@ impl ModuleResolver {
         self.resolve_bare(specifier)
     }
 
-    fn resolve_relative(&self, specifier: &str, referrer: Option<&str>) -> Result<String, ResolveError> {
+    fn resolve_relative(
+        &self,
+        specifier: &str,
+        referrer: Option<&str>,
+    ) -> Result<String, ResolveError> {
         let base = if let Some(ref_url) = referrer {
             if let Ok(url) = Url::parse(ref_url) {
                 url
@@ -65,15 +69,17 @@ impl ModuleResolver {
             return Err(ResolveError::NoBase);
         };
 
-        let resolved = base.join(specifier)
+        let resolved = base
+            .join(specifier)
             .map_err(|e| ResolveError::InvalidUrl(e.to_string()))?;
-        
+
         Ok(resolved.to_string())
     }
 
     fn resolve_absolute(&self, specifier: &str) -> Result<String, ResolveError> {
         if let Some(base) = &self.base_url {
-            let resolved = base.join(specifier)
+            let resolved = base
+                .join(specifier)
                 .map_err(|e| ResolveError::InvalidUrl(e.to_string()))?;
             Ok(resolved.to_string())
         } else {
@@ -94,16 +100,19 @@ impl ModuleResolver {
     }
 
     fn is_builtin_module(&self, specifier: &str) -> bool {
-        matches!(specifier, "crypto" | "path" | "fs" | "url" | "stream" | "events" | "util")
+        matches!(
+            specifier,
+            "crypto" | "path" | "fs" | "url" | "stream" | "events" | "util"
+        )
     }
 
     fn resolve_node_modules(&self, specifier: &str) -> Option<String> {
         let mut current_dir = std::env::current_dir().ok()?;
-        
+
         loop {
             let node_modules = current_dir.join("node_modules");
             let module_path = node_modules.join(specifier);
-            
+
             if module_path.exists() {
                 let package_json = module_path.join("package.json");
                 if package_json.exists() {
@@ -114,25 +123,25 @@ impl ModuleResolver {
                         }
                     }
                 }
-                
+
                 let index_js = module_path.join("index.js");
                 if index_js.exists() {
                     return Some(format!("file://{}", index_js.display()));
                 }
             }
-            
+
             if !current_dir.pop() {
                 break;
             }
         }
-        
+
         None
     }
 
     fn read_package_main(&self, package_json: &Path) -> Result<String, std::io::Error> {
         let content = std::fs::read_to_string(package_json)?;
         let package: serde_json::Value = serde_json::from_str(&content)?;
-        
+
         if let Some(main) = package.get("main").and_then(|v| v.as_str()) {
             Ok(main.to_string())
         } else {
@@ -205,10 +214,7 @@ impl ImportMap {
     }
 
     pub fn add_scoped_import(&mut self, scope: String, specifier: String, url: String) {
-        self.scopes
-            .entry(scope)
-            .or_default()
-            .insert(specifier, url);
+        self.scopes.entry(scope).or_default().insert(specifier, url);
     }
 }
 

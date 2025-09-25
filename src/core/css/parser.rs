@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use serde::{Serialize, Deserialize};
 
 use super::CSSStyleDeclaration;
 use crate::core::css::selector::Selector;
@@ -591,10 +591,7 @@ impl CSSParser {
 
         self.expect_token(&Token::RightBrace)?;
 
-        Ok(CSSRule::Media(CSSMediaRule {
-            media_query,
-            rules,
-        }))
+        Ok(CSSRule::Media(CSSMediaRule { media_query, rules }))
     }
 
     fn parse_import_rule(&mut self) -> Result<CSSRule> {
@@ -629,10 +626,7 @@ impl CSSParser {
 
         self.consume_if_match(&Token::Semicolon);
 
-        Ok(CSSRule::Import(CSSImportRule {
-            href,
-            media_query,
-        }))
+        Ok(CSSRule::Import(CSSImportRule { href, media_query }))
     }
 
     fn parse_font_face_rule(&mut self) -> Result<CSSRule> {
@@ -945,7 +939,11 @@ impl CSSParser {
                 self.advance();
                 property
             }
-            _ => return Err(ParseError::InvalidSyntax("Expected property name".to_string())),
+            _ => {
+                return Err(ParseError::InvalidSyntax(
+                    "Expected property name".to_string(),
+                ))
+            }
         };
 
         self.skip_whitespace();
@@ -1125,9 +1123,7 @@ impl CSSParser {
                                 Some(Token::Dimension(n, unit)) => {
                                     val.push_str(&format!("{}{}", n, unit))
                                 }
-                                Some(Token::Percentage(p)) => {
-                                    val.push_str(&format!("{}%", p))
-                                }
+                                Some(Token::Percentage(p)) => val.push_str(&format!("{}%", p)),
                                 Some(Token::Ident(s)) => val.push_str(s),
                                 Some(Token::Delim(c)) => val.push(*c),
                                 Some(Token::Whitespace) => {

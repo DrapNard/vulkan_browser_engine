@@ -3,8 +3,8 @@ pub mod resolver;
 use base64::Engine;
 pub use resolver::*;
 
-use std::collections::HashMap;
 use async_recursion::async_recursion;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::log;
@@ -46,52 +46,56 @@ impl ModuleSystem {
         }
     }
     #[async_recursion(?Send)]
-pub async fn import_module(&self, specifier: &str, referrer: Option<String>) -> Result<Arc<Module>, ModuleError> {
-    let resolved_url = self.resolver.resolve(specifier, referrer.as_deref())?;
-   
-    {
-        let cache = self.module_cache.read().await;
-        if let Some(module) = cache.get(&resolved_url) {
-            if module.loaded {
-                return Ok(module.clone());
+    pub async fn import_module(
+        &self,
+        specifier: &str,
+        referrer: Option<String>,
+    ) -> Result<Arc<Module>, ModuleError> {
+        let resolved_url = self.resolver.resolve(specifier, referrer.as_deref())?;
+
+        {
+            let cache = self.module_cache.read().await;
+            if let Some(module) = cache.get(&resolved_url) {
+                if module.loaded {
+                    return Ok(module.clone());
+                }
             }
         }
-    }
-    
-    let source = self.loader.load(&resolved_url).await?;
-    let dependencies = self.extract_dependencies(&source)?;
-   
-    let module = Arc::new(Module {
-        id: resolved_url.clone(),
-        source,
-        exports: HashMap::new(),
-        dependencies,
-        loaded: false,
-        loading: true,
-    });
-    
-    {
-        let mut cache = self.module_cache.write().await;
-        cache.insert(resolved_url.clone(), module.clone());
-    }
-    
-    for dep in &module.dependencies {
-        self.import_module(dep, Some(resolved_url.clone())).await?;
-    }
-    
-    self.execute_module(&module).await?;
-    
-    {
-        let mut cache = self.module_cache.write().await;
-        if let Some(cached_module) = cache.get_mut(&resolved_url) {
-            let module_mut = Arc::make_mut(cached_module);
-            module_mut.loaded = true;
-            module_mut.loading = false;
+
+        let source = self.loader.load(&resolved_url).await?;
+        let dependencies = self.extract_dependencies(&source)?;
+
+        let module = Arc::new(Module {
+            id: resolved_url.clone(),
+            source,
+            exports: HashMap::new(),
+            dependencies,
+            loaded: false,
+            loading: true,
+        });
+
+        {
+            let mut cache = self.module_cache.write().await;
+            cache.insert(resolved_url.clone(), module.clone());
         }
+
+        for dep in &module.dependencies {
+            self.import_module(dep, Some(resolved_url.clone())).await?;
+        }
+
+        self.execute_module(&module).await?;
+
+        {
+            let mut cache = self.module_cache.write().await;
+            if let Some(cached_module) = cache.get_mut(&resolved_url) {
+                let module_mut = Arc::make_mut(cached_module);
+                module_mut.loaded = true;
+                module_mut.loading = false;
+            }
+        }
+
+        Ok(module)
     }
-    
-    Ok(module)
-}
 
     async fn execute_module(&self, module: &Module) -> Result<(), ModuleError> {
         log::info!("Executing module: {}", module.id);
@@ -100,14 +104,14 @@ pub async fn import_module(&self, specifier: &str, referrer: Option<String>) -> 
 
     fn extract_dependencies(&self, source: &str) -> Result<Vec<String>, ModuleError> {
         let mut dependencies = Vec::new();
-        
+
         for line in source.lines() {
             let trimmed = line.trim();
             if let Some(import_spec) = self.parse_import_statement(trimmed) {
                 dependencies.push(import_spec);
             }
         }
-        
+
         Ok(dependencies)
     }
 
@@ -116,16 +120,20 @@ pub async fn import_module(&self, specifier: &str, referrer: Option<String>) -> 
             if let Some(from_pos) = line.find(" from ") {
                 let spec_part = &line[from_pos + 6..].trim();
                 if spec_part.starts_with('"') && spec_part.ends_with('"') {
-                    return Some(spec_part[1..spec_part.len()-1].to_string());
+                    return Some(spec_part[1..spec_part.len() - 1].to_string());
                 } else if spec_part.starts_with('\'') && spec_part.ends_with('\'') {
-                    return Some(spec_part[1..spec_part.len()-1].to_string());
+                    return Some(spec_part[1..spec_part.len() - 1].to_string());
                 }
             }
         }
         None
     }
 
-    pub async fn register_builtin_module(&self, name: &str, exports: HashMap<String, ModuleExport>) {
+    pub async fn register_builtin_module(
+        &self,
+        name: &str,
+        exports: HashMap<String, ModuleExport>,
+    ) {
         let module = Arc::new(Module {
             id: name.to_string(),
             source: String::new(),
@@ -142,14 +150,14 @@ pub async fn import_module(&self, specifier: &str, referrer: Option<String>) -> 
     pub async fn get_module_graph(&self) -> ModuleGraph {
         let cache = self.module_cache.read().await;
         let mut graph = ModuleGraph::new();
-        
+
         for (id, module) in cache.iter() {
             graph.add_module(id.clone());
             for dep in &module.dependencies {
                 graph.add_dependency(id.clone(), dep.clone());
             }
         }
-        
+
         graph
     }
 }
@@ -175,16 +183,20 @@ impl ModuleLoader {
     }
 
     async fn load_remote(&self, url: &str) -> Result<String, ModuleError> {
-        let response = reqwest::get(url).await
+        let response = reqwest::get(url)
+            .await
             .map_err(|e| ModuleError::LoadError(e.to_string()))?;
-        
-        response.text().await
+
+        response
+            .text()
+            .await
             .map_err(|e| ModuleError::LoadError(e.to_string()))
     }
 
     async fn load_file(&self, url: &str) -> Result<String, ModuleError> {
         let path = url.strip_prefix("file://").unwrap_or(url);
-        tokio::fs::read_to_string(path).await
+        tokio::fs::read_to_string(path)
+            .await
             .map_err(|e| ModuleError::LoadError(e.to_string()))
     }
 
@@ -194,8 +206,7 @@ impl ModuleLoader {
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(data_part)
                 .map_err(|e| ModuleError::LoadError(e.to_string()))?;
-            String::from_utf8(decoded)
-                .map_err(|e| ModuleError::LoadError(e.to_string()))
+            String::from_utf8(decoded).map_err(|e| ModuleError::LoadError(e.to_string()))
         } else {
             Err(ModuleError::InvalidDataUrl)
         }
@@ -232,19 +243,19 @@ impl ModuleGraph {
     fn add_dependency(&mut self, from: String, to: String) {
         self.add_module(from.clone());
         self.add_module(to.clone());
-        
+
         if let Some(node) = self.nodes.get_mut(&from) {
             if !node.dependencies.contains(&to) {
                 node.dependencies.push(to.clone());
             }
         }
-        
+
         if let Some(node) = self.nodes.get_mut(&to) {
             if !node.dependents.contains(&from) {
                 node.dependents.push(from.clone());
             }
         }
-        
+
         self.edges.push((from, to));
     }
 
@@ -252,13 +263,19 @@ impl ModuleGraph {
         let mut cycles = Vec::new();
         let mut visited = std::collections::HashSet::new();
         let mut rec_stack = std::collections::HashSet::new();
-        
+
         for node_id in self.nodes.keys() {
             if !visited.contains(node_id) {
-                self.dfs_cycle_detection(node_id, &mut visited, &mut rec_stack, &mut cycles, &mut Vec::new());
+                self.dfs_cycle_detection(
+                    node_id,
+                    &mut visited,
+                    &mut rec_stack,
+                    &mut cycles,
+                    &mut Vec::new(),
+                );
             }
         }
-        
+
         cycles
     }
 

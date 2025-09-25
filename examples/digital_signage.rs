@@ -1,5 +1,5 @@
-use vulkan_browser_engine::{BrowserEngine, BrowserConfig as Config};
 use tokio::time::{sleep, Duration};
+use vulkan_browser_engine::{BrowserConfig as Config, BrowserEngine};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,16 +1,16 @@
 pub mod fetch;
 
-pub use fetch::{FetchResponse};
+pub use fetch::FetchResponse;
 
-use std::sync::Arc;
-use std::collections::HashMap;
-use parking_lot::RwLock;
 use dashmap::DashMap;
+use parking_lot::RwLock;
+use reqwest::{header::HeaderMap, Client, ClientBuilder};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
-use serde::{Serialize, Deserialize};
-use url::Url;
 use tokio::time::{timeout, Duration};
-use reqwest::{Client, ClientBuilder, header::HeaderMap};
+use url::Url;
 
 use crate::BrowserConfig;
 
@@ -83,8 +83,7 @@ impl Default for NetworkConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CachePolicy {
     pub max_age: Option<u64>,
     pub must_revalidate: bool,
@@ -96,7 +95,6 @@ pub struct CachePolicy {
     pub stale_while_revalidate: Option<u64>,
     pub stale_if_error: Option<u64>,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
@@ -193,8 +191,10 @@ impl HttpCache {
 
     fn ensure_capacity(&self, needed_size: usize) {
         let current_size = *self.current_size_bytes.read();
-        
-        if current_size + needed_size > self.max_size_bytes || self.entries.len() >= self.max_entries {
+
+        if current_size + needed_size > self.max_size_bytes
+            || self.entries.len() >= self.max_entries
+        {
             self.evict_entries(needed_size);
         }
     }
@@ -204,7 +204,9 @@ impl HttpCache {
         let mut freed_size = 0;
 
         // Collect entries sorted by last accessed time (LRU)
-        let mut entries: Vec<_> = self.entries.iter()
+        let mut entries: Vec<_> = self
+            .entries
+            .iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
 
@@ -351,7 +353,9 @@ impl DnsCache {
     }
 
     pub fn cleanup_expired(&self) {
-        let expired_keys: Vec<String> = self.entries.iter()
+        let expired_keys: Vec<String> = self
+            .entries
+            .iter()
             .filter(|entry| entry.created_at.elapsed() >= self.ttl)
             .map(|entry| entry.key().clone())
             .collect();
@@ -442,7 +446,7 @@ impl Default for SecurityPolicy {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             blocked_hosts: Vec::new(),
             allowed_hosts: None,
-            max_request_size: 10 * 1024 * 1024, // 10 MB
+            max_request_size: 10 * 1024 * 1024,   // 10 MB
             max_response_size: 100 * 1024 * 1024, // 100 MB
             require_https_for_sensitive: true,
             block_private_ips: false,
@@ -455,25 +459,28 @@ impl SecurityPolicy {
     pub fn check_url(&self, url: &Url) -> Result<()> {
         // Check scheme
         if !self.allowed_schemes.contains(&url.scheme().to_string()) {
-            return Err(NetworkError::SecurityPolicy(
-                format!("Scheme '{}' not allowed", url.scheme())
-            ));
+            return Err(NetworkError::SecurityPolicy(format!(
+                "Scheme '{}' not allowed",
+                url.scheme()
+            )));
         }
 
         // Check host against blocklist
         if let Some(host) = url.host_str() {
             if self.blocked_hosts.contains(&host.to_string()) {
-                return Err(NetworkError::SecurityPolicy(
-                    format!("Host '{}' is blocked", host)
-                ));
+                return Err(NetworkError::SecurityPolicy(format!(
+                    "Host '{}' is blocked",
+                    host
+                )));
             }
 
             // Check host against allowlist if specified
             if let Some(ref allowed) = self.allowed_hosts {
                 if !allowed.contains(&host.to_string()) {
-                    return Err(NetworkError::SecurityPolicy(
-                        format!("Host '{}' not in allowlist", host)
-                    ));
+                    return Err(NetworkError::SecurityPolicy(format!(
+                        "Host '{}' not in allowlist",
+                        host
+                    )));
                 }
             }
 
@@ -482,16 +489,17 @@ impl SecurityPolicy {
                 if let Ok(ip) = host.parse::<std::net::IpAddr>() {
                     if self.is_private_ip(&ip) {
                         return Err(NetworkError::SecurityPolicy(
-                            "Private IP addresses are blocked".to_string()
+                            "Private IP addresses are blocked".to_string(),
                         ));
                     }
                 }
             }
 
             // Check for localhost if blocked
-            if self.block_localhost && (host == "localhost" || host == "127.0.0.1" || host == "::1") {
+            if self.block_localhost && (host == "localhost" || host == "127.0.0.1" || host == "::1")
+            {
                 return Err(NetworkError::SecurityPolicy(
-                    "Localhost access is blocked".to_string()
+                    "Localhost access is blocked".to_string(),
                 ));
             }
         }
@@ -536,7 +544,7 @@ impl NetworkManager {
 
         let http_cache = Arc::new(HttpCache::new(
             50 * 1024 * 1024, // 50 MB cache
-            10000, // Max 10k entries
+            10000,            // Max 10k entries
         ));
 
         let connection_pool = Arc::new(ConnectionPool::new(
@@ -544,9 +552,7 @@ impl NetworkManager {
             Duration::from_millis(config.connect_timeout_ms),
         ));
 
-        let dns_cache = Arc::new(DnsCache::new(
-            Duration::from_secs(config.dns_cache_ttl_s),
-        ));
+        let dns_cache = Arc::new(DnsCache::new(Duration::from_secs(config.dns_cache_ttl_s)));
 
         let request_limiter = Arc::new(RequestLimiter::new(config.max_concurrent_requests));
 
@@ -605,10 +611,12 @@ impl NetworkManager {
                     if !cached_response.is_stale() || cached_response.can_serve_stale() {
                         let mut metrics = self.metrics.write();
                         metrics.cache_hits += 1;
-                        
+
                         return Ok(FetchResponse {
                             status: 200,
-                            headers: cached_response.headers.iter()
+                            headers: cached_response
+                                .headers
+                                .iter()
                                 .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                                 .collect(),
                             body: cached_response.data,
@@ -649,11 +657,13 @@ impl NetworkManager {
                     metrics.failed_requests += 1;
                 }
             }
-            
+
             // Update average request time
             let total_requests = metrics.total_requests as f64;
-            metrics.average_request_time_ms = 
-                (metrics.average_request_time_ms * (total_requests - 1.0) + request_time.as_millis() as f64) / total_requests;
+            metrics.average_request_time_ms = (metrics.average_request_time_ms
+                * (total_requests - 1.0)
+                + request_time.as_millis() as f64)
+                / total_requests;
         }
 
         result
@@ -677,7 +687,12 @@ impl NetworkManager {
             "DELETE" => client.delete(&request.url),
             "HEAD" => client.head(&request.url),
             "PATCH" => client.patch(&request.url),
-            _ => return Err(NetworkError::RequestFailed(format!("Unsupported method: {}", request.method))),
+            _ => {
+                return Err(NetworkError::RequestFailed(format!(
+                    "Unsupported method: {}",
+                    request.method
+                )))
+            }
         };
 
         // Add headers
@@ -691,9 +706,8 @@ impl NetworkManager {
         }
 
         // Set timeout
-        let timeout_duration = Duration::from_millis(
-            request.timeout_ms.unwrap_or(self.config.request_timeout_ms)
-        );
+        let timeout_duration =
+            Duration::from_millis(request.timeout_ms.unwrap_or(self.config.request_timeout_ms));
 
         // Execute request with timeout and cancellation
         let request_future = req_builder.send();
@@ -714,17 +728,23 @@ impl NetworkManager {
 
         // Read response body
         let status = response.status().as_u16();
-        let headers: HashMap<String, String> = response.headers().iter()
+        let headers: HashMap<String, String> = response
+            .headers()
+            .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
-        let body = response.bytes().await
+        let body = response
+            .bytes()
+            .await
             .map_err(|e| NetworkError::RequestFailed(format!("Failed to read body: {}", e)))?
             .to_vec();
 
         // Check response size limit
         if body.len() > self.config.max_response_size_mb * 1024 * 1024 {
-            return Err(NetworkError::RequestFailed("Response too large".to_string()));
+            return Err(NetworkError::RequestFailed(
+                "Response too large".to_string(),
+            ));
         }
 
         let fetch_response = FetchResponse {
@@ -754,7 +774,7 @@ impl NetworkManager {
         for (key, value) in &response.headers {
             if let (Ok(header_name), Ok(header_value)) = (
                 key.parse::<reqwest::header::HeaderName>(),
-                value.parse::<reqwest::header::HeaderValue>()
+                value.parse::<reqwest::header::HeaderValue>(),
             ) {
                 headers.insert(header_name, header_value);
             }
@@ -785,7 +805,9 @@ impl NetworkManager {
     }
 
     pub async fn cancel_all_requests(&self) {
-        let request_ids: Vec<String> = self.active_requests.iter()
+        let request_ids: Vec<String> = self
+            .active_requests
+            .iter()
             .map(|entry| entry.key().clone())
             .collect();
 

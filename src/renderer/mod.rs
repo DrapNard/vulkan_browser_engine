@@ -4,9 +4,9 @@ pub mod pipeline;
 pub mod text;
 pub mod vulkan;
 
-use crate::core::layout::LayoutBox;
-use crate::core::dom::NodeId;
 use crate::core::dom::Document;
+use crate::core::dom::NodeId;
+use crate::core::layout::LayoutBox;
 use ash::vk;
 use thiserror::Error;
 
@@ -281,7 +281,7 @@ impl VulkanRenderer {
     pub async fn new() -> Result<Self, RenderError> {
         let mut context = RenderContext::new();
         context.initialize()?;
-        
+
         Ok(Self {
             context,
             pipeline_cache: PipelineCache::new(),
@@ -292,31 +292,42 @@ impl VulkanRenderer {
         })
     }
 
-    pub async fn render(&mut self, _document: &Document, layout_tree: &LayoutTree) -> Result<(), RenderError> {
+    pub async fn render(
+        &mut self,
+        _document: &Document,
+        layout_tree: &LayoutTree,
+    ) -> Result<(), RenderError> {
         let frame_start = std::time::Instant::now();
         self.frame_stats = FrameStats::default();
-        
+
         let command_buffer = self.context.begin_frame()?;
-        
+
         self.render_background(command_buffer).await?;
         self.render_elements(command_buffer, layout_tree).await?;
         self.render_text(command_buffer, layout_tree).await?;
         self.flush_vertices(command_buffer).await?;
-        
+
         self.context.end_frame(command_buffer)?;
-        
+
         self.frame_stats.frame_time_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
-        
+
         Ok(())
     }
 
-    async fn render_background(&self, _command_buffer: vk::CommandBuffer) -> Result<(), RenderError> {
+    async fn render_background(
+        &self,
+        _command_buffer: vk::CommandBuffer,
+    ) -> Result<(), RenderError> {
         Ok(())
     }
 
-    async fn render_elements(&mut self, _command_buffer: vk::CommandBuffer, layout_tree: &LayoutTree) -> Result<(), RenderError> {
+    async fn render_elements(
+        &mut self,
+        _command_buffer: vk::CommandBuffer,
+        layout_tree: &LayoutTree,
+    ) -> Result<(), RenderError> {
         self.vertex_buffer.clear();
-        
+
         for node in layout_tree.get_render_nodes() {
             match node.element_type {
                 ElementType::Block => {
@@ -331,18 +342,18 @@ impl VulkanRenderer {
                 _ => {}
             }
         }
-        
+
         Ok(())
     }
 
     fn render_block_element(&mut self, node: &LayoutNode) -> Result<(), RenderError> {
         let _pipeline = self.pipeline_cache.get_rect_pipeline()?;
         let vertices = self.create_rect_vertices(&node.bounds, &node.style.background_color);
-        
+
         self.vertex_buffer.extend(vertices);
         self.frame_stats.vertices_rendered += 4;
         self.frame_stats.draw_calls += 1;
-        
+
         Ok(())
     }
 
@@ -354,10 +365,10 @@ impl VulkanRenderer {
         if let Some(image_url) = &node.image_url {
             let _texture = self.image_loader.load_image(image_url).await?;
             let _pipeline = self.pipeline_cache.get_image_pipeline()?;
-            
+
             let vertices = self.create_image_vertices(&node.bounds);
             self.vertex_buffer.extend(vertices);
-            
+
             self.frame_stats.vertices_rendered += 4;
             self.frame_stats.texture_binds += 1;
             self.frame_stats.draw_calls += 1;
@@ -365,90 +376,100 @@ impl VulkanRenderer {
         Ok(())
     }
 
-    async fn render_text(&mut self, command_buffer: vk::CommandBuffer, layout_tree: &LayoutTree) -> Result<(), RenderError> {
+    async fn render_text(
+        &mut self,
+        command_buffer: vk::CommandBuffer,
+        layout_tree: &LayoutTree,
+    ) -> Result<(), RenderError> {
         for node in layout_tree.get_text_nodes() {
             if let Some(text_content) = &node.text_content {
-                self.text_renderer.render_text(
-                    command_buffer,
-                    text_content,
-                    &node.bounds,
-                    &node.style.color,
-                    &node.style.font_family,
-                    node.style.font_size,
-                ).await?;
-                
+                self.text_renderer
+                    .render_text(
+                        command_buffer,
+                        text_content,
+                        &node.bounds,
+                        &node.style.color,
+                        &node.style.font_family,
+                        node.style.font_size,
+                    )
+                    .await?;
+
                 self.frame_stats.draw_calls += 1;
             }
         }
         Ok(())
     }
 
-    async fn flush_vertices(&mut self, _command_buffer: vk::CommandBuffer) -> Result<(), RenderError> {
+    async fn flush_vertices(
+        &mut self,
+        _command_buffer: vk::CommandBuffer,
+    ) -> Result<(), RenderError> {
         if self.vertex_buffer.is_empty() {
             return Ok(());
         }
-        
+
         // Simulate GPU vertex buffer upload
         let vertex_count = self.vertex_buffer.len();
         self.vertex_buffer.clear();
-        
+
         self.frame_stats.draw_calls += if vertex_count > 0 { 1 } else { 0 };
-        
+
         Ok(())
     }
 
     fn create_rect_vertices(&self, bounds: &Rect, color: &Option<String>) -> Vec<Vertex> {
-        let rgba = color.as_ref()
+        let rgba = color
+            .as_ref()
             .map(|c| self.parse_color(c))
             .unwrap_or([0.2, 0.2, 0.2, 1.0]); // Default gray
-        
+
         vec![
-            Vertex { 
-                position: [bounds.x, bounds.y, 0.0], 
-                tex_coord: [0.0, 0.0], 
-                color: rgba 
+            Vertex {
+                position: [bounds.x, bounds.y, 0.0],
+                tex_coord: [0.0, 0.0],
+                color: rgba,
             },
-            Vertex { 
-                position: [bounds.x + bounds.width, bounds.y, 0.0], 
-                tex_coord: [1.0, 0.0], 
-                color: rgba 
+            Vertex {
+                position: [bounds.x + bounds.width, bounds.y, 0.0],
+                tex_coord: [1.0, 0.0],
+                color: rgba,
             },
-            Vertex { 
-                position: [bounds.x + bounds.width, bounds.y + bounds.height, 0.0], 
-                tex_coord: [1.0, 1.0], 
-                color: rgba 
+            Vertex {
+                position: [bounds.x + bounds.width, bounds.y + bounds.height, 0.0],
+                tex_coord: [1.0, 1.0],
+                color: rgba,
             },
-            Vertex { 
-                position: [bounds.x, bounds.y + bounds.height, 0.0], 
-                tex_coord: [0.0, 1.0], 
-                color: rgba 
+            Vertex {
+                position: [bounds.x, bounds.y + bounds.height, 0.0],
+                tex_coord: [0.0, 1.0],
+                color: rgba,
             },
         ]
     }
 
     fn create_image_vertices(&self, bounds: &Rect) -> Vec<Vertex> {
         const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-        
+
         vec![
-            Vertex { 
-                position: [bounds.x, bounds.y, 0.0], 
-                tex_coord: [0.0, 0.0], 
-                color: WHITE 
+            Vertex {
+                position: [bounds.x, bounds.y, 0.0],
+                tex_coord: [0.0, 0.0],
+                color: WHITE,
             },
-            Vertex { 
-                position: [bounds.x + bounds.width, bounds.y, 0.0], 
-                tex_coord: [1.0, 0.0], 
-                color: WHITE 
+            Vertex {
+                position: [bounds.x + bounds.width, bounds.y, 0.0],
+                tex_coord: [1.0, 0.0],
+                color: WHITE,
             },
-            Vertex { 
-                position: [bounds.x + bounds.width, bounds.y + bounds.height, 0.0], 
-                tex_coord: [1.0, 1.0], 
-                color: WHITE 
+            Vertex {
+                position: [bounds.x + bounds.width, bounds.y + bounds.height, 0.0],
+                tex_coord: [1.0, 1.0],
+                color: WHITE,
             },
-            Vertex { 
-                position: [bounds.x, bounds.y + bounds.height, 0.0], 
-                tex_coord: [0.0, 1.0], 
-                color: WHITE 
+            Vertex {
+                position: [bounds.x, bounds.y + bounds.height, 0.0],
+                tex_coord: [0.0, 1.0],
+                color: WHITE,
             },
         ]
     }
@@ -456,12 +477,12 @@ impl VulkanRenderer {
     fn parse_color(&self, color_str: &str) -> [f32; 4] {
         if color_str.starts_with('#') && color_str.len() == 7 {
             let parse_hex = |s: &str| u8::from_str_radix(s, 16).unwrap_or(0) as f32 / 255.0;
-            
+
             [
                 parse_hex(&color_str[1..3]),
                 parse_hex(&color_str[3..5]),
                 parse_hex(&color_str[5..7]),
-                1.0
+                1.0,
             ]
         } else {
             // Named colors
@@ -496,10 +517,10 @@ impl VulkanRenderer {
             "draw_calls": self.frame_stats.draw_calls,
             "texture_binds": self.frame_stats.texture_binds,
             "frame_time_ms": self.frame_stats.frame_time_ms,
-            "fps": if self.frame_stats.frame_time_ms > 0.0 { 
-                1000.0 / self.frame_stats.frame_time_ms 
-            } else { 
-                0.0 
+            "fps": if self.frame_stats.frame_time_ms > 0.0 {
+                1000.0 / self.frame_stats.frame_time_ms
+            } else {
+                0.0
             },
             "vertex_buffer_size": self.vertex_buffer.len(),
             "frame_index": self.context.frame_index,
@@ -527,10 +548,10 @@ pub enum RenderError {
 
 impl Default for VulkanRenderer {
     fn default() -> Self {
-        futures::executor::block_on(async { 
-            Self::new().await.unwrap_or_else(|e| {
-                panic!("Failed to initialize VulkanRenderer: {}", e)
-            })
+        futures::executor::block_on(async {
+            Self::new()
+                .await
+                .unwrap_or_else(|e| panic!("Failed to initialize VulkanRenderer: {}", e))
         })
     }
 }

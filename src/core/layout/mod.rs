@@ -2,17 +2,27 @@ pub mod engine;
 pub mod flexbox;
 pub mod grid;
 
-pub use engine::{LayoutEngine, LayoutConstraints, LayoutResult, LayoutBox, LayoutError, LayoutMetrics};
-pub use flexbox::{FlexboxLayout, FlexDirection, FlexWrap, JustifyContent as FlexJustifyContent, AlignItems as FlexAlignItems, AlignContent as FlexAlignContent, AlignSelf, FlexContainer, FlexItem, FlexLine};
-pub use grid::{GridLayout, GridContainer, GridItem, GridArea, GridLine, TrackSize, JustifyItems, AlignItems as GridAlignItems, JustifyContent as GridJustifyContent, AlignContent as GridAlignContent, GridAutoFlow};
+pub use engine::{
+    LayoutBox, LayoutConstraints, LayoutEngine, LayoutError, LayoutMetrics, LayoutResult,
+};
+pub use flexbox::{
+    AlignContent as FlexAlignContent, AlignItems as FlexAlignItems, AlignSelf, FlexContainer,
+    FlexDirection, FlexItem, FlexLine, FlexWrap, FlexboxLayout,
+    JustifyContent as FlexJustifyContent,
+};
+pub use grid::{
+    AlignContent as GridAlignContent, AlignItems as GridAlignItems, GridArea, GridAutoFlow,
+    GridContainer, GridItem, GridLayout, GridLine, JustifyContent as GridJustifyContent,
+    JustifyItems, TrackSize,
+};
 
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 use thiserror::Error;
 
 use crate::core::{
+    css::{ComputedValue, StyleEngine},
     dom::{Document, NodeId},
-    css::{StyleEngine, ComputedValue},
 };
 
 #[derive(Error, Debug)]
@@ -71,7 +81,7 @@ pub struct LayoutPerformanceMonitor {
 impl LayoutManager {
     pub fn new(viewport_width: u32, viewport_height: u32, config: LayoutManagerConfig) -> Self {
         let engine = Arc::new(LayoutEngine::new(viewport_width, viewport_height));
-        
+
         Self {
             engine,
             config,
@@ -88,23 +98,22 @@ impl LayoutManager {
 
         // Check if we need to timeout early
         let timeout_duration = std::time::Duration::from_millis(self.config.max_layout_time_ms);
-        
+
         let layout_future = self.engine.compute_layout(document, style_engine);
-        
+
         match tokio::time::timeout(timeout_duration, layout_future).await {
             Ok(result) => {
                 result.map_err(LayoutManagerError::from)?;
-                
+
                 start_time.elapsed();
                 self.update_performance_metrics().await;
-                
+
                 Ok(())
             }
-            Err(_) => {
-                Err(LayoutManagerError::Timeout(
-                    format!("Layout computation exceeded {}ms timeout", self.config.max_layout_time_ms)
-                ))
-            }
+            Err(_) => Err(LayoutManagerError::Timeout(format!(
+                "Layout computation exceeded {}ms timeout",
+                self.config.max_layout_time_ms
+            ))),
         }
     }
 
@@ -119,7 +128,9 @@ impl LayoutManager {
     }
 
     pub async fn resize_viewport(&self, width: u32, height: u32) -> Result<()> {
-        self.engine.resize_viewport(width, height).await
+        self.engine
+            .resize_viewport(width, height)
+            .await
             .map_err(LayoutManagerError::from)
     }
 
@@ -134,34 +145,35 @@ impl LayoutManager {
     pub async fn get_performance_metrics(&self) -> LayoutPerformanceMonitor {
         let engine_metrics = self.engine.get_metrics().await;
         let mut monitor = self.performance_monitor.write();
-        
+
         monitor.total_layouts = engine_metrics.total_layouts;
         monitor.average_layout_time_ms = engine_metrics.average_layout_time_us / 1000.0;
         monitor.max_layout_time_ms = (engine_metrics.max_layout_time_us / 1000.0) as u64;
         monitor.cache_hit_rate = if engine_metrics.cache_hits + engine_metrics.cache_misses > 0 {
-            engine_metrics.cache_hits as f64 / (engine_metrics.cache_hits + engine_metrics.cache_misses) as f64
+            engine_metrics.cache_hits as f64
+                / (engine_metrics.cache_hits + engine_metrics.cache_misses) as f64
         } else {
             0.0
         };
         monitor.memory_usage_mb = engine_metrics.memory_usage_bytes as f64 / (1024.0 * 1024.0);
-        
+
         monitor.clone()
     }
 
     async fn update_performance_metrics(&self) {
         let mut monitor = self.performance_monitor.write();
         monitor.last_layout_timestamp = Some(std::time::Instant::now());
-        
+
         // Check memory usage
         let engine_stats = self.engine.get_cache_stats();
         if let Some(memory_mb) = engine_stats.get("memory_usage_mb").and_then(|v| v.as_f64()) {
             if memory_mb > self.config.max_memory_mb as f64 {
                 tracing::warn!(
-                    "Layout memory usage ({:.2} MB) exceeds limit ({} MB)", 
-                    memory_mb, 
+                    "Layout memory usage ({:.2} MB) exceeds limit ({} MB)",
+                    memory_mb,
                     self.config.max_memory_mb
                 );
-                
+
                 // Clear some cache to free memory
                 self.engine.clear_cache();
             }
@@ -189,10 +201,7 @@ impl LayoutManager {
 pub mod utils {
     use super::*;
 
-    pub fn calculate_intrinsic_width(
-        node_id: NodeId,
-        style_engine: &StyleEngine,
-    ) -> f32 {
+    pub fn calculate_intrinsic_width(node_id: NodeId, style_engine: &StyleEngine) -> f32 {
         // Simplified intrinsic width calculation
         if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
             if let Ok(width) = computed_styles.get_computed_value("width") {
@@ -204,10 +213,7 @@ pub mod utils {
         0.0
     }
 
-    pub fn calculate_intrinsic_height(
-        node_id: NodeId,
-        style_engine: &StyleEngine,
-    ) -> f32 {
+    pub fn calculate_intrinsic_height(node_id: NodeId, style_engine: &StyleEngine) -> f32 {
         // Simplified intrinsic height calculation
         if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
             if let Ok(height) = computed_styles.get_computed_value("height") {
@@ -253,13 +259,17 @@ pub mod utils {
             let node_guard = node.read();
             if (*node_guard).is_text() {
                 let text = node_guard.get_text_content();
-                let longest_word = text.split_whitespace()
+                let longest_word = text
+                    .split_whitespace()
                     .map(|word| word.len())
                     .max()
                     .unwrap_or(0);
-                
+
                 if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-                    let font_size = match computed_styles.get_computed_value("font_size") {Ok(ComputedValue::Length(v)) => v, _ => 16.0,};
+                    let font_size = match computed_styles.get_computed_value("font_size") {
+                        Ok(ComputedValue::Length(v)) => v,
+                        _ => 16.0,
+                    };
                     return longest_word as f32 * font_size * 0.6; // Approximation
                 }
             }
@@ -277,9 +287,12 @@ pub mod utils {
             let node_guard = node.read();
             if (*node_guard).is_text() {
                 let text = node_guard.get_text_content();
-                
+
                 if let Some(computed_styles) = style_engine.get_computed_styles(node_id) {
-                    let font_size = match computed_styles.get_computed_value("font_size") {Ok(ComputedValue::Length(v)) => v, _ => 16.0,};
+                    let font_size = match computed_styles.get_computed_value("font_size") {
+                        Ok(ComputedValue::Length(v)) => v,
+                        _ => 16.0,
+                    };
                     return text.len() as f32 * font_size * 0.6; // Approximation
                 }
             }
@@ -287,11 +300,7 @@ pub mod utils {
         0.0
     }
 
-    pub fn resolve_percentage(
-        percentage: f32,
-        base: f32,
-        fallback: f32,
-    ) -> f32 {
+    pub fn resolve_percentage(percentage: f32, base: f32, fallback: f32) -> f32 {
         if base.is_finite() && base >= 0.0 {
             base * percentage / 100.0
         } else {
@@ -299,21 +308,17 @@ pub mod utils {
         }
     }
 
-    pub fn clamp_size(
-        size: f32,
-        min_size: Option<f32>,
-        max_size: Option<f32>,
-    ) -> f32 {
+    pub fn clamp_size(size: f32, min_size: Option<f32>, max_size: Option<f32>) -> f32 {
         let mut result = size;
-        
+
         if let Some(min) = min_size {
             result = result.max(min);
         }
-        
+
         if let Some(max) = max_size {
             result = result.min(max);
         }
-        
+
         result
     }
 
@@ -323,7 +328,8 @@ pub mod utils {
         borders: (f32, f32),
         padding: (f32, f32),
     ) -> f32 {
-        (container_size - margins.0 - margins.1 - borders.0 - borders.1 - padding.0 - padding.1).max(0.0)
+        (container_size - margins.0 - margins.1 - borders.0 - borders.1 - padding.0 - padding.1)
+            .max(0.0)
     }
 
     pub fn distribute_space(
@@ -332,7 +338,7 @@ pub mod utils {
         distribution_type: SpaceDistribution,
     ) -> Vec<f32> {
         let mut positions = Vec::with_capacity(items.len());
-        
+
         if items.is_empty() {
             return positions;
         }
@@ -427,11 +433,11 @@ pub mod text {
     ) -> TextMetrics {
         // Simplified text measurement - in a real implementation, this would use
         // actual font metrics and text shaping
-        
+
         let char_width = font_size * 0.6; // Average character width approximation
         let ascent = font_size * 0.8;
         let descent = font_size * 0.2;
-        
+
         if let Some(max_w) = max_width {
             let chars_per_line = (max_w / char_width) as usize;
             if chars_per_line == 0 {
@@ -466,7 +472,8 @@ pub mod text {
             }
 
             let line_count = lines.len().max(1);
-            let width = lines.iter()
+            let width = lines
+                .iter()
                 .map(|line| line.len() as f32 * char_width)
                 .fold(0.0f32, f32::max)
                 .min(max_w);
@@ -495,14 +502,10 @@ pub mod text {
         }
     }
 
-    pub fn break_text_into_lines(
-        text: &str,
-        max_width: f32,
-        font_size: f32,
-    ) -> Vec<String> {
+    pub fn break_text_into_lines(text: &str, max_width: f32, font_size: f32) -> Vec<String> {
         let char_width = font_size * 0.6;
         let chars_per_line = (max_width / char_width) as usize;
-        
+
         if chars_per_line == 0 {
             return vec![text.to_string()];
         }
@@ -539,7 +542,7 @@ pub mod text {
 #[cfg(debug_assertions)]
 pub mod debug {
     use super::*;
-    
+
     pub fn print_layout_tree(
         node_id: NodeId,
         document: &Document,
@@ -547,7 +550,7 @@ pub mod debug {
         indent: usize,
     ) {
         let indent_str = "  ".repeat(indent);
-        
+
         if let Some(layout_box) = layout_manager.get_layout_box(node_id) {
             if let Some(node) = document.get_node(node_id) {
                 let node_guard = node.read();
@@ -575,24 +578,36 @@ pub mod debug {
         layout_manager: &LayoutManager,
     ) -> Vec<String> {
         let mut errors = Vec::new();
-        
+
         if let Some(layout_box) = layout_manager.get_layout_box(node_id) {
             // Check for negative dimensions
             if layout_box.content_width < 0.0 {
-                errors.push(format!("Node {:?} has negative width: {}", node_id, layout_box.content_width));
+                errors.push(format!(
+                    "Node {:?} has negative width: {}",
+                    node_id, layout_box.content_width
+                ));
             }
-            
+
             if layout_box.content_height < 0.0 {
-                errors.push(format!("Node {:?} has negative height: {}", node_id, layout_box.content_height));
+                errors.push(format!(
+                    "Node {:?} has negative height: {}",
+                    node_id, layout_box.content_height
+                ));
             }
 
             // Check for infinite or NaN values
             if !layout_box.content_x.is_finite() {
-                errors.push(format!("Node {:?} has invalid x position: {}", node_id, layout_box.content_x));
+                errors.push(format!(
+                    "Node {:?} has invalid x position: {}",
+                    node_id, layout_box.content_x
+                ));
             }
-            
+
             if !layout_box.content_y.is_finite() {
-                errors.push(format!("Node {:?} has invalid y position: {}", node_id, layout_box.content_y));
+                errors.push(format!(
+                    "Node {:?} has invalid y position: {}",
+                    node_id, layout_box.content_y
+                ));
             }
         }
 

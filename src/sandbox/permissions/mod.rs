@@ -4,12 +4,12 @@ pub use audit::*;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, Duration};
-use tokio::sync::{RwLock, Notify};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+use tokio::sync::{Notify, RwLock};
 use tokio::time::interval;
-use tracing::{info, error};
+use tracing::{error, info};
 
 pub struct PermissionManager {
     policies: Arc<RwLock<HashMap<u32, Arc<ProcessPermissions>>>>,
@@ -117,7 +117,7 @@ impl PermissionManager {
         let auditor = Arc::new(SecurityAuditor::new().await);
         let capability_checker = Arc::new(CapabilityChecker::new().await);
         let shutdown_signal = Arc::new(Notify::new());
-        
+
         let manager = Self {
             policies: Arc::new(RwLock::new(HashMap::new())),
             capability_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -163,48 +163,77 @@ impl PermissionManager {
         }));
     }
 
-    pub async fn grant_permissions(&self, process_id: u32, mut permissions: ProcessPermissions) -> Result<(), PermissionError> {
-        if !self.capability_checker.validate_capabilities_batch(&permissions.capabilities).await {
-            self.metrics.permission_denials.fetch_add(1, Ordering::Relaxed);
+    pub async fn grant_permissions(
+        &self,
+        process_id: u32,
+        mut permissions: ProcessPermissions,
+    ) -> Result<(), PermissionError> {
+        if !self
+            .capability_checker
+            .validate_capabilities_batch(&permissions.capabilities)
+            .await
+        {
+            self.metrics
+                .permission_denials
+                .fetch_add(1, Ordering::Relaxed);
             return Err(PermissionError::InvalidCapability);
         }
 
         permissions.last_accessed = Arc::new(std::sync::atomic::AtomicU64::new(
-            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default().as_secs()
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         ));
 
         let permissions_arc = Arc::new(permissions.clone());
-        self.policies.write().await.insert(process_id, Arc::clone(&permissions_arc));
+        self.policies
+            .write()
+            .await
+            .insert(process_id, Arc::clone(&permissions_arc));
         self.invalidate_cache_for_process(process_id).await;
 
-        self.auditor.log_permission_grant(process_id, &permissions).await;
-        self.metrics.permission_grants.fetch_add(1, Ordering::Relaxed);
-        
+        self.auditor
+            .log_permission_grant(process_id, &permissions)
+            .await;
+        self.metrics
+            .permission_grants
+            .fetch_add(1, Ordering::Relaxed);
+
         Ok(())
     }
 
-    pub async fn revoke_permission(&self, process_id: u32, capability: Capability) -> Result<(), PermissionError> {
+    pub async fn revoke_permission(
+        &self,
+        process_id: u32,
+        capability: Capability,
+    ) -> Result<(), PermissionError> {
         let mut policies = self.policies.write().await;
-        
+
         if let Some(permissions_arc) = policies.get(&process_id) {
             let mut new_permissions = (**permissions_arc).clone();
             new_permissions.capabilities.remove(&capability);
-            
+
             let new_arc = Arc::new(new_permissions);
             policies.insert(process_id, new_arc);
-            
+
             drop(policies);
             self.invalidate_cache_for_process(process_id).await;
-            self.auditor.log_permission_revoke(process_id, &capability).await;
-            
+            self.auditor
+                .log_permission_revoke(process_id, &capability)
+                .await;
+
             Ok(())
         } else {
             Err(PermissionError::ProcessNotFound)
         }
     }
 
-    pub async fn check_permission(&self, process_id: u32, capability: &Capability) -> Result<bool, PermissionError> {
+    pub async fn check_permission(
+        &self,
+        process_id: u32,
+        capability: &Capability,
+    ) -> Result<bool, PermissionError> {
         self.metrics.total_checks.fetch_add(1, Ordering::Relaxed);
 
         if let Some(cached_result) = self.get_cached_permission(process_id, capability).await {
@@ -216,7 +245,7 @@ impl PermissionManager {
             let policies = self.policies.read().await;
             if let Some(permissions) = policies.get(&process_id) {
                 let now = SystemTime::now();
-                
+
                 if let Some(expires_at) = permissions.expires_at {
                     if now > expires_at {
                         return Ok(false);
@@ -225,7 +254,7 @@ impl PermissionManager {
 
                 let has_permission = permissions.capabilities.contains(capability);
                 let last_accessed = Arc::clone(&permissions.last_accessed);
-                
+
                 (has_permission, last_accessed)
             } else {
                 return Err(PermissionError::ProcessNotFound);
@@ -234,34 +263,46 @@ impl PermissionManager {
 
         let now = SystemTime::now();
         last_accessed.store(
-            now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
-            Ordering::Relaxed
+            now.duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            Ordering::Relaxed,
         );
-        
-        self.cache_permission_result(process_id, capability.clone(), has_permission).await;
-        self.auditor.log_permission_check(process_id, capability, has_permission).await;
-        
+
+        self.cache_permission_result(process_id, capability.clone(), has_permission)
+            .await;
+        self.auditor
+            .log_permission_check(process_id, capability, has_permission)
+            .await;
+
         Ok(has_permission)
     }
 
-    pub async fn check_permission_batch(&self, process_id: u32, capabilities: &[Capability]) -> Result<Vec<bool>, PermissionError> {
+    pub async fn check_permission_batch(
+        &self,
+        process_id: u32,
+        capabilities: &[Capability],
+    ) -> Result<Vec<bool>, PermissionError> {
         let policies = self.policies.read().await;
         if let Some(permissions) = policies.get(&process_id) {
             let now = SystemTime::now();
-            
+
             if let Some(expires_at) = permissions.expires_at {
                 if now > expires_at {
                     return Ok(vec![false; capabilities.len()]);
                 }
             }
 
-            let results: Vec<bool> = capabilities.iter()
+            let results: Vec<bool> = capabilities
+                .iter()
                 .map(|cap| permissions.capabilities.contains(cap))
                 .collect();
 
             permissions.last_accessed.store(
-                now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
-                Ordering::Relaxed
+                now.duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                Ordering::Relaxed,
             );
 
             Ok(results)
@@ -279,21 +320,31 @@ impl PermissionManager {
         }
     }
 
-    pub async fn check_resource_usage(&self, process_id: u32, usage: &ResourceUsage) -> Result<bool, PermissionError> {
+    pub async fn check_resource_usage(
+        &self,
+        process_id: u32,
+        usage: &ResourceUsage,
+    ) -> Result<bool, PermissionError> {
         let (within_limits, limits_copy) = {
             let policies = self.policies.read().await;
             if let Some(permissions) = policies.get(&process_id) {
                 let limits = &permissions.resource_limits;
-                
+
                 let violations = [
                     (usage.memory_bytes > limits.max_memory_bytes, "memory"),
                     (usage.cpu_percent > limits.max_cpu_percent, "cpu"),
-                    (usage.file_descriptors > limits.max_file_descriptors, "file_descriptors"),
-                    (usage.network_connections > limits.max_network_connections, "network_connections"),
+                    (
+                        usage.file_descriptors > limits.max_file_descriptors,
+                        "file_descriptors",
+                    ),
+                    (
+                        usage.network_connections > limits.max_network_connections,
+                        "network_connections",
+                    ),
                 ];
 
                 let within_limits = !violations.iter().any(|(violated, _)| *violated);
-                
+
                 (within_limits, limits.clone())
             } else {
                 return Err(PermissionError::ProcessNotFound);
@@ -301,7 +352,9 @@ impl PermissionManager {
         };
 
         if !within_limits {
-            self.auditor.log_resource_violation(process_id, usage, &limits_copy).await;
+            self.auditor
+                .log_resource_violation(process_id, usage, &limits_copy)
+                .await;
         }
 
         Ok(within_limits)
@@ -314,7 +367,7 @@ impl PermissionManager {
     ) {
         let now = SystemTime::now();
         let mut expired_processes = Vec::new();
-        
+
         {
             let mut policies_guard = policies.write().await;
             policies_guard.retain(|&process_id, permissions| {
@@ -329,24 +382,36 @@ impl PermissionManager {
         }
 
         if !expired_processes.is_empty() {
-            metrics.expired_cleanups.fetch_add(expired_processes.len() as u64, Ordering::Relaxed);
-            
+            metrics
+                .expired_cleanups
+                .fetch_add(expired_processes.len() as u64, Ordering::Relaxed);
+
             for process_id in expired_processes {
                 auditor.log_permission_expiry(process_id).await;
             }
         }
     }
 
-    async fn cleanup_cache_background(cache: Arc<RwLock<HashMap<(u32, Capability), (bool, SystemTime)>>>) {
+    async fn cleanup_cache_background(
+        cache: Arc<RwLock<HashMap<(u32, Capability), (bool, SystemTime)>>>,
+    ) {
         let cutoff = SystemTime::now() - Duration::from_secs(600);
         let mut cache_guard = cache.write().await;
         cache_guard.retain(|_, (_, timestamp)| *timestamp > cutoff);
     }
 
-    async fn get_cached_permission(&self, process_id: u32, capability: &Capability) -> Option<bool> {
+    async fn get_cached_permission(
+        &self,
+        process_id: u32,
+        capability: &Capability,
+    ) -> Option<bool> {
         let cache = self.capability_cache.read().await;
         if let Some((result, timestamp)) = cache.get(&(process_id, capability.clone())) {
-            if SystemTime::now().duration_since(*timestamp).unwrap_or_default() < Duration::from_secs(60) {
+            if SystemTime::now()
+                .duration_since(*timestamp)
+                .unwrap_or_default()
+                < Duration::from_secs(60)
+            {
                 return Some(*result);
             }
         }
@@ -356,7 +421,7 @@ impl PermissionManager {
     async fn cache_permission_result(&self, process_id: u32, capability: Capability, result: bool) {
         let mut cache = self.capability_cache.write().await;
         cache.insert((process_id, capability), (result, SystemTime::now()));
-        
+
         if cache.len() > 10000 {
             let cutoff = SystemTime::now() - Duration::from_secs(300);
             cache.retain(|_, (_, timestamp)| *timestamp > cutoff);
@@ -373,19 +438,25 @@ impl PermissionManager {
         policies.get(&process_id).map(|arc| (**arc).clone())
     }
 
-    pub async fn update_resource_limits(&self, process_id: u32, new_limits: ResourceLimits) -> Result<(), PermissionError> {
+    pub async fn update_resource_limits(
+        &self,
+        process_id: u32,
+        new_limits: ResourceLimits,
+    ) -> Result<(), PermissionError> {
         let mut policies = self.policies.write().await;
-        
+
         if let Some(permissions_arc) = policies.get(&process_id) {
             let mut new_permissions = (**permissions_arc).clone();
             new_permissions.resource_limits = new_limits.clone();
-            
+
             let new_arc = Arc::new(new_permissions);
             policies.insert(process_id, new_arc);
-            
+
             drop(policies);
-            self.auditor.log_resource_limit_update(process_id, &new_limits).await;
-            
+            self.auditor
+                .log_resource_limit_update(process_id, &new_limits)
+                .await;
+
             Ok(())
         } else {
             Err(PermissionError::ProcessNotFound)
@@ -417,11 +488,11 @@ impl PermissionManager {
 
     pub async fn shutdown(&mut self) -> Result<(), PermissionError> {
         self.shutdown_signal.notify_waiters();
-        
+
         if let Some(handle) = self.cleanup_handle.take() {
             handle.abort();
         }
-        
+
         self.auditor.shutdown().await;
         Ok(())
     }
@@ -438,7 +509,8 @@ impl CapabilityChecker {
         system_capabilities.insert(Capability::StorageAccess);
 
         let platform_features = PlatformFeatures::detect().await;
-        let capability_matrix = Self::build_capability_matrix(&system_capabilities, &platform_features);
+        let capability_matrix =
+            Self::build_capability_matrix(&system_capabilities, &platform_features);
 
         Self {
             system_capabilities,
@@ -447,26 +519,29 @@ impl CapabilityChecker {
         }
     }
 
-    fn build_capability_matrix(capabilities: &HashSet<Capability>, features: &PlatformFeatures) -> HashMap<Capability, bool> {
+    fn build_capability_matrix(
+        capabilities: &HashSet<Capability>,
+        features: &PlatformFeatures,
+    ) -> HashMap<Capability, bool> {
         let mut matrix = HashMap::new();
-        
+
         for capability in capabilities {
             matrix.insert(capability.clone(), true);
         }
-        
+
         matrix.insert(Capability::AccessCamera, features.has_camera);
         matrix.insert(Capability::AccessMicrophone, features.has_microphone);
         matrix.insert(Capability::AccessGpu, features.has_gpu);
         matrix.insert(Capability::AccessSerialPort, features.has_serial_ports);
         matrix.insert(Capability::AccessUsb, features.has_usb);
-        
+
         matrix
     }
 
     async fn validate_capabilities_batch(&self, capabilities: &HashSet<Capability>) -> bool {
         capabilities.iter().all(|cap| {
-            self.capability_matrix.get(cap).copied().unwrap_or(false) || 
-            self.is_capability_available(cap)
+            self.capability_matrix.get(cap).copied().unwrap_or(false)
+                || self.is_capability_available(cap)
         })
     }
 
@@ -477,7 +552,7 @@ impl CapabilityChecker {
             Capability::AccessCamera => self.platform_features.has_camera,
             Capability::AccessMicrophone => self.platform_features.has_microphone,
             Capability::AccessGpu => self.platform_features.has_gpu,
-            _ => self.system_capabilities.contains(capability)
+            _ => self.system_capabilities.contains(capability),
         }
     }
 }
@@ -601,7 +676,10 @@ impl Default for IpcPermissions {
         Self {
             can_send_to: HashSet::new(),
             can_receive_from: HashSet::new(),
-            allowed_message_types: ["RenderCommand", "DomUpdate"].iter().map(|s| s.to_string()).collect(),
+            allowed_message_types: ["RenderCommand", "DomUpdate"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             max_message_size: 1024 * 1024,
         }
     }

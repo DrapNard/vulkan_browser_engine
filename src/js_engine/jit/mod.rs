@@ -1,18 +1,18 @@
-use std::sync::Arc;
-use std::collections::HashMap;
-use parking_lot::Mutex;
 use dashmap::DashMap;
-use thiserror::Error;
+use parking_lot::Mutex;
 use smallvec::SmallVec;
+use std::collections::HashMap;
+use std::sync::Arc;
+use thiserror::Error;
 
 use cranelift::prelude::*;
 use cranelift_codegen::ir::Function;
-use cranelift_codegen::Context as CraneliftContext;
-use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::ir::UserFuncName;
+use cranelift_codegen::settings::{self, Configurable};
+use cranelift_codegen::Context as CraneliftContext;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{Module, FuncId, Linkage};
+use cranelift_module::{FuncId, Linkage, Module};
 use target_lexicon::Triple;
 
 #[derive(Error, Debug)]
@@ -62,7 +62,9 @@ impl ValueType {
             ValueType::I64 => types::I64,
             ValueType::F32 => types::F32,
             ValueType::F64 => types::F64,
-            ValueType::Pointer | ValueType::Object | ValueType::String | ValueType::Function => types::I64,
+            ValueType::Pointer | ValueType::Object | ValueType::String | ValueType::Function => {
+                types::I64
+            }
             ValueType::Undefined => types::I64,
         }
     }
@@ -173,17 +175,20 @@ impl ProfilerData {
     }
 
     pub fn record_function_call(&self, function_name: &str, execution_time: f64) {
-        self.hot_functions.entry(function_name.to_string())
+        self.hot_functions
+            .entry(function_name.to_string())
             .and_modify(|time| *time += execution_time)
             .or_insert(execution_time);
     }
 
     pub fn update_type_feedback(&self, function_name: &str, feedback: TypeFeedback) {
-        self.type_feedback.insert(function_name.to_string(), feedback);
+        self.type_feedback
+            .insert(function_name.to_string(), feedback);
     }
 
     pub fn is_hot_function(&self, function_name: &str, threshold: f64) -> bool {
-        self.hot_functions.get(function_name)
+        self.hot_functions
+            .get(function_name)
             .map(|time| *time.value() > threshold)
             .unwrap_or(false)
     }
@@ -206,29 +211,32 @@ impl JITCompiler {
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
         flag_builder.set("is_pic", "false").unwrap();
-        flag_builder.set("enable_verifier", cfg!(debug_assertions).to_string().as_str()).unwrap();
-        
+        flag_builder
+            .set(
+                "enable_verifier",
+                cfg!(debug_assertions).to_string().as_str(),
+            )
+            .unwrap();
+
         match optimization_level {
             OptimizationLevel::None => {
                 flag_builder.set("opt_level", "none").unwrap();
-            },
+            }
             OptimizationLevel::Basic => {
                 flag_builder.set("opt_level", "speed").unwrap();
-            },
+            }
             OptimizationLevel::Aggressive => {
                 flag_builder.set("opt_level", "speed_and_size").unwrap();
-            },
+            }
             OptimizationLevel::Debug => {
                 flag_builder.set("opt_level", "none").unwrap();
                 flag_builder.set("enable_verifier", "true").unwrap();
-            },
+            }
         }
 
         let isa_flags = settings::Flags::new(flag_builder);
         let isa = cranelift_native::builder()
-            .unwrap_or_else(|_| {
-                cranelift_codegen::isa::lookup(Triple::host()).unwrap()
-            })
+            .unwrap_or_else(|_| cranelift_codegen::isa::lookup(Triple::host()).unwrap())
             .finish(isa_flags)
             .map_err(|e| JITError::Compilation(e.to_string()))?;
 
@@ -290,11 +298,15 @@ impl JITCompiler {
             let mut builder_context = self.builder_context.lock();
 
             let signature = self.create_function_signature(&js_function.parameters)?;
-            
-            let func_id = module.declare_function(&js_function.name, Linkage::Local, &signature)
+
+            let func_id = module
+                .declare_function(&js_function.name, Linkage::Local, &signature)
                 .map_err(|e| JITError::Compilation(e.to_string()))?;
 
-            context.func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature.clone());
+            context.func = Function::with_name_signature(
+                UserFuncName::user(0, func_id.as_u32()),
+                signature.clone(),
+            );
 
             {
                 let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
@@ -302,7 +314,10 @@ impl JITCompiler {
             }
 
             if let Err(errors) = module.define_function(func_id, &mut context) {
-                return Err(JITError::CodeGeneration(format!("Function definition failed: {:?}", errors)));
+                return Err(JITError::CodeGeneration(format!(
+                    "Function definition failed: {:?}",
+                    errors
+                )));
             }
 
             module.clear_context(&mut context);
@@ -326,7 +341,8 @@ impl JITCompiler {
             total_execution_time: std::time::Duration::default(),
         };
 
-        self.compiled_functions.insert(js_function.name.clone(), compiled_function.clone());
+        self.compiled_functions
+            .insert(js_function.name.clone(), compiled_function.clone());
 
         Ok(compiled_function)
     }
@@ -344,18 +360,26 @@ impl JITCompiler {
         Ok(sig)
     }
 
-    fn compile_function_body(&self, mut builder: FunctionBuilder, _js_function: &JSFunction) -> Result<()> {
-    let entry_block = builder.create_block();
-    builder.append_block_params_for_function_params(entry_block);
-    builder.switch_to_block(entry_block);
-    builder.seal_block(entry_block);
-    let undefined_value = builder.ins().iconst(types::I64, 0);
-    builder.ins().return_(&[undefined_value]);
-    builder.finalize();
-    Ok(())
+    fn compile_function_body(
+        &self,
+        mut builder: FunctionBuilder,
+        _js_function: &JSFunction,
+    ) -> Result<()> {
+        let entry_block = builder.create_block();
+        builder.append_block_params_for_function_params(entry_block);
+        builder.switch_to_block(entry_block);
+        builder.seal_block(entry_block);
+        let undefined_value = builder.ins().iconst(types::I64, 0);
+        builder.ins().return_(&[undefined_value]);
+        builder.finalize();
+        Ok(())
     }
 
-    pub async fn specialize_function(&self, function_name: &str, types: &[ValueType]) -> Result<FuncId> {
+    pub async fn specialize_function(
+        &self,
+        function_name: &str,
+        types: &[ValueType],
+    ) -> Result<FuncId> {
         let specialization_key = format!("{}_{:?}", function_name, types);
 
         if let Some(specializations) = self.type_specializations.get(function_name) {
@@ -364,7 +388,9 @@ impl JITCompiler {
             }
         }
 
-        let original_function = self.compiled_functions.get(function_name)
+        let original_function = self
+            .compiled_functions
+            .get(function_name)
             .ok_or_else(|| JITError::FunctionNotFound(function_name.to_string()))?;
 
         let mut module = self.module.lock();
@@ -374,14 +400,16 @@ impl JITCompiler {
         let specialized_name = format!("{}_specialized_{}", function_name, fastrand::u64(..));
         let signature = original_function.signature.clone();
 
-        let func_id = module.declare_function(&specialized_name, Linkage::Local, &signature)
+        let func_id = module
+            .declare_function(&specialized_name, Linkage::Local, &signature)
             .map_err(|e| JITError::Compilation(e.to_string()))?;
 
-        context.func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature);
+        context.func =
+            Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), signature);
 
         {
             let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
-            
+
             let entry_block = builder.create_block();
             builder.append_block_params_for_function_params(entry_block);
             builder.switch_to_block(entry_block);
@@ -393,12 +421,16 @@ impl JITCompiler {
         }
 
         if let Err(errors) = module.define_function(func_id, &mut context) {
-            return Err(JITError::CodeGeneration(format!("Specialization failed: {:?}", errors)));
+            return Err(JITError::CodeGeneration(format!(
+                "Specialization failed: {:?}",
+                errors
+            )));
         }
 
         module.clear_context(&mut context);
 
-        self.type_specializations.entry(function_name.to_string())
+        self.type_specializations
+            .entry(function_name.to_string())
             .or_default()
             .insert(specialization_key, func_id);
 
@@ -406,7 +438,8 @@ impl JITCompiler {
     }
 
     pub fn record_type_feedback(&self, function_name: &str, feedback: TypeFeedback) {
-        self.profiler_data.update_type_feedback(function_name, feedback);
+        self.profiler_data
+            .update_type_feedback(function_name, feedback);
     }
 
     pub async fn trigger_recompilation(&self, function_name: &str) -> Result<()> {
@@ -419,7 +452,9 @@ impl JITCompiler {
     }
 
     pub fn should_deoptimize(&self, function_name: &str) -> bool {
-        self.profiler_data.deoptimization_points.get(function_name)
+        self.profiler_data
+            .deoptimization_points
+            .get(function_name)
             .map(|points| !points.is_empty())
             .unwrap_or(false)
     }
@@ -436,7 +471,9 @@ impl JITCompiler {
     }
 
     pub async fn optimize_all(&self) -> Result<()> {
-        let hot_functions: Vec<String> = self.profiler_data.hot_functions
+        let hot_functions: Vec<String> = self
+            .profiler_data
+            .hot_functions
             .iter()
             .filter(|entry| *entry.value() > 100.0)
             .map(|entry| entry.key().clone())
@@ -461,17 +498,45 @@ impl JITCompiler {
     }
 }
 
-extern "C" fn js_add(_a: u64, _b: u64) -> u64 { 0 }
-extern "C" fn js_subtract(_a: u64, _b: u64) -> u64 { 0 }
-extern "C" fn js_multiply(_a: u64, _b: u64) -> u64 { 0 }
-extern "C" fn js_divide(_a: u64, _b: u64) -> u64 { 0 }
-extern "C" fn js_equals(_a: u64, _b: u64) -> u32 { 0 }
-extern "C" fn js_typeof(_value: u64) -> u64 { 0 }
-extern "C" fn js_to_number(_value: u64) -> f64 { 0.0 }
-extern "C" fn js_to_string(_value: u64) -> u64 { 0 }
-extern "C" fn js_property_get(_object: u64, _property: u64) -> u64 { 0 }
-extern "C" fn js_property_set(_object: u64, _property: u64, _value: u64) -> u64 { 0 }
-extern "C" fn js_function_call(_function: u64, _this: u64, _argc: u32) -> u64 { 0 }
-extern "C" fn js_new_object() -> u64 { 0 }
-extern "C" fn js_gc_barrier(_value: u64) -> u64 { 0 }
-extern "C" fn js_deoptimize(_reason: u64) -> u64 { 0 }
+extern "C" fn js_add(_a: u64, _b: u64) -> u64 {
+    0
+}
+extern "C" fn js_subtract(_a: u64, _b: u64) -> u64 {
+    0
+}
+extern "C" fn js_multiply(_a: u64, _b: u64) -> u64 {
+    0
+}
+extern "C" fn js_divide(_a: u64, _b: u64) -> u64 {
+    0
+}
+extern "C" fn js_equals(_a: u64, _b: u64) -> u32 {
+    0
+}
+extern "C" fn js_typeof(_value: u64) -> u64 {
+    0
+}
+extern "C" fn js_to_number(_value: u64) -> f64 {
+    0.0
+}
+extern "C" fn js_to_string(_value: u64) -> u64 {
+    0
+}
+extern "C" fn js_property_get(_object: u64, _property: u64) -> u64 {
+    0
+}
+extern "C" fn js_property_set(_object: u64, _property: u64, _value: u64) -> u64 {
+    0
+}
+extern "C" fn js_function_call(_function: u64, _this: u64, _argc: u32) -> u64 {
+    0
+}
+extern "C" fn js_new_object() -> u64 {
+    0
+}
+extern "C" fn js_gc_barrier(_value: u64) -> u64 {
+    0
+}
+extern "C" fn js_deoptimize(_reason: u64) -> u64 {
+    0
+}

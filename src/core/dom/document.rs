@@ -1,10 +1,10 @@
-use std::sync::Arc;
-use std::collections::HashMap;
-use parking_lot::RwLock;
 use dashmap::DashMap;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
-use serde::{Serialize, Deserialize};
 
 #[derive(Error, Debug)]
 pub enum DocumentError {
@@ -497,7 +497,8 @@ impl Document {
             return Ok(cached);
         }
         let result = self.execute_css_selector(selector)?;
-        self.query_cache.cache_selector_result(selector, result.clone());
+        self.query_cache
+            .cache_selector_result(selector, result.clone());
         Ok(result)
     }
 
@@ -535,7 +536,9 @@ impl Document {
                 }
                 scripts.push(InlineScript {
                     content,
-                    script_type: node.get_attribute("type").unwrap_or_else(|| "text/javascript".to_string()),
+                    script_type: node
+                        .get_attribute("type")
+                        .unwrap_or_else(|| "text/javascript".to_string()),
                     async_loading: node.has_attribute("async"),
                     defer_execution: node.has_attribute("defer"),
                     integrity: node.get_attribute("integrity"),

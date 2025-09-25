@@ -98,12 +98,10 @@ pub enum TouchEventType {
     Cancel,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KeyModifiers {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
     pub meta: bool,
 }
-

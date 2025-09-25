@@ -44,7 +44,7 @@ struct ResourceThresholds {
 impl ProcessManager {
     pub fn new() -> Self {
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
-        
+
         let manager = Self {
             processes: Arc::new(RwLock::new(HashMap::new())),
             next_process_id: Arc::new(RwLock::new(1)),
@@ -61,13 +61,14 @@ impl ProcessManager {
     pub async fn create_process(&self, config: ProcessConfig) -> Result<u32, ProcessError> {
         let process_id = self.generate_process_id().await;
         let process = SandboxedProcess::new(process_id, config).await?;
-        
+
         {
             let mut processes = self.processes.write().await;
             processes.insert(process_id, process);
         }
 
-        self.process_events.send(ProcessEvent::ProcessStarted(process_id))
+        self.process_events
+            .send(ProcessEvent::ProcessStarted(process_id))
             .map_err(|_| ProcessError::CommandSendFailed)?;
 
         log::info!("Created process with ID: {}", process_id);
@@ -89,11 +90,12 @@ impl ProcessManager {
         let mut processes = self.processes.write().await;
         if let Some(process) = processes.get_mut(&process_id) {
             process.terminate().await?;
-            
+
             let stats = process.get_stats().await;
-            self.process_events.send(ProcessEvent::ProcessTerminated(process_id, stats.exit_code))
+            self.process_events
+                .send(ProcessEvent::ProcessTerminated(process_id, stats.exit_code))
                 .map_err(|_| ProcessError::CommandSendFailed)?;
-            
+
             log::info!("Terminated process: {}", process_id);
             Ok(())
         } else {
@@ -105,10 +107,11 @@ impl ProcessManager {
         let mut processes = self.processes.write().await;
         if let Some(process) = processes.remove(&process_id) {
             drop(process);
-            
-            self.process_events.send(ProcessEvent::ProcessTerminated(process_id, Some(-9)))
+
+            self.process_events
+                .send(ProcessEvent::ProcessTerminated(process_id, Some(-9)))
                 .map_err(|_| ProcessError::CommandSendFailed)?;
-            
+
             log::info!("Killed process: {}", process_id);
             Ok(())
         } else {
@@ -159,11 +162,11 @@ impl ProcessManager {
     pub async fn list_processes(&self) -> Vec<ProcessSummary> {
         let processes = self.processes.read().await;
         let mut summaries = Vec::new();
-        
+
         for (id, process) in processes.iter() {
             let stats = process.get_stats().await;
             let status = process.get_status().await;
-            
+
             summaries.push(ProcessSummary {
                 id: *id,
                 status,
@@ -173,7 +176,7 @@ impl ProcessManager {
                 exit_code: stats.exit_code,
             });
         }
-        
+
         summaries
     }
 
@@ -183,15 +186,15 @@ impl ProcessManager {
         let mut total_cpu = 0.0;
         let mut total_processes = 0;
         let mut running_processes = 0;
-        
+
         for process in processes.values() {
             let stats = process.get_stats().await;
             let status = process.get_status().await;
-            
+
             total_memory += stats.memory_usage_bytes;
             total_cpu += stats.cpu_usage_percent;
             total_processes += 1;
-            
+
             if status == ProcessStatus::Running {
                 running_processes += 1;
             }
@@ -199,7 +202,11 @@ impl ProcessManager {
 
         SystemResourceUsage {
             total_memory_bytes: total_memory,
-            average_cpu_percent: if total_processes > 0 { total_cpu / total_processes as f64 } else { 0.0 },
+            average_cpu_percent: if total_processes > 0 {
+                total_cpu / total_processes as f64
+            } else {
+                0.0
+            },
             total_processes,
             running_processes,
             system_load: Self::get_system_load().await,
@@ -232,7 +239,7 @@ impl ProcessManager {
                     unhealthy += 1;
                     failed_checks.push(*id);
                 }
-                ProcessStatus::Terminated => {},
+                ProcessStatus::Terminated => {}
                 _ => unhealthy += 1,
             }
         }
@@ -293,8 +300,9 @@ impl ProcessManager {
     pub async fn force_cleanup(&self) -> Result<usize, ProcessError> {
         let mut processes = self.processes.write().await;
         let mut cleaned_count = 0;
-        
-        let terminated_ids: Vec<u32> = processes.iter()
+
+        let terminated_ids: Vec<u32> = processes
+            .iter()
             .filter_map(|(id, process)| {
                 let status = futures::executor::block_on(process.get_status());
                 if matches!(status, ProcessStatus::Terminated | ProcessStatus::Failed) {
@@ -310,7 +318,10 @@ impl ProcessManager {
             cleaned_count += 1;
         }
 
-        log::info!("Force cleanup removed {} terminated processes", cleaned_count);
+        log::info!(
+            "Force cleanup removed {} terminated processes",
+            cleaned_count
+        );
         Ok(cleaned_count)
     }
 }
@@ -338,21 +349,27 @@ impl ResourceMonitor {
 
             loop {
                 interval_timer.tick().await;
-                
+
                 let processes_guard = processes.read().await;
                 for (id, process) in processes_guard.iter() {
                     let stats = process.get_stats().await;
                     let config = &process.config;
-                    
-                    let memory_percent = (stats.memory_usage_bytes as f64 / (config.resource_limits.max_memory_mb * 1024 * 1024) as f64) * 100.0;
+
+                    let memory_percent = (stats.memory_usage_bytes as f64
+                        / (config.resource_limits.max_memory_mb * 1024 * 1024) as f64)
+                        * 100.0;
                     let cpu_percent = stats.cpu_usage_percent;
 
                     if memory_percent > thresholds.memory_warning_percent {
-                        let _ = event_sender.send(ProcessEvent::ResourceLimitExceeded(*id, "memory".to_string()));
+                        let _ = event_sender.send(ProcessEvent::ResourceLimitExceeded(
+                            *id,
+                            "memory".to_string(),
+                        ));
                     }
 
                     if cpu_percent > thresholds.cpu_warning_percent {
-                        let _ = event_sender.send(ProcessEvent::ResourceLimitExceeded(*id, "cpu".to_string()));
+                        let _ = event_sender
+                            .send(ProcessEvent::ResourceLimitExceeded(*id, "cpu".to_string()));
                     }
                 }
             }
@@ -378,15 +395,16 @@ impl CleanupScheduler {
 
             loop {
                 interval_timer.tick().await;
-                
+
                 let mut processes_guard = processes.write().await;
                 let now = std::time::Instant::now();
-                
-                let to_remove: Vec<u32> = processes_guard.iter()
+
+                let to_remove: Vec<u32> = processes_guard
+                    .iter()
                     .filter_map(|(id, process)| {
                         let status = futures::executor::block_on(process.get_status());
                         let stats = futures::executor::block_on(process.get_stats());
-                        
+
                         if matches!(status, ProcessStatus::Terminated | ProcessStatus::Failed) {
                             if let Some(start_time) = stats.start_time {
                                 if now.duration_since(start_time) > max_age {

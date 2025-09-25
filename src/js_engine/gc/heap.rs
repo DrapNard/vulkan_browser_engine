@@ -110,7 +110,7 @@ pub struct HeapSnapshot {
 impl Heap {
     pub fn snapshot(&self) -> HeapSnapshot {
         let fragmentation_ratio = self.free_list.len() as f64 / self.next_id as f64;
-        
+
         HeapSnapshot {
             total_size: self.total_allocated,
             object_count: self.objects.len(),

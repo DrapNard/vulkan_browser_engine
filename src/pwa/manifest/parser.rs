@@ -10,8 +10,8 @@ impl ManifestParser {
     }
 
     pub fn parse(&self, json_str: &str, base_url: Option<&str>) -> Result<Manifest, ManifestError> {
-        let value: Value = serde_json::from_str(json_str)
-            .map_err(|e| ManifestError::ParseError(e.to_string()))?;
+        let value: Value =
+            serde_json::from_str(json_str).map_err(|e| ManifestError::ParseError(e.to_string()))?;
 
         let mut manifest = Manifest::default();
 
@@ -57,9 +57,11 @@ impl ManifestParser {
             manifest.icons = self.parse_icons(icons, base_url)?;
         }
 
-        if let Some(service_worker_url) = value.get("serviceworker")
+        if let Some(service_worker_url) = value
+            .get("serviceworker")
             .and_then(|sw| sw.get("src"))
-            .and_then(|v| v.as_str()) {
+            .and_then(|v| v.as_str())
+        {
             manifest.service_worker = Some(self.resolve_url(service_worker_url, base_url)?);
         }
 
@@ -91,7 +93,10 @@ impl ManifestParser {
             manifest.related_applications = self.parse_related_applications(related_apps)?;
         }
 
-        if let Some(prefer_related) = value.get("prefer_related_applications").and_then(|v| v.as_bool()) {
+        if let Some(prefer_related) = value
+            .get("prefer_related_applications")
+            .and_then(|v| v.as_bool())
+        {
             manifest.prefer_related_applications = prefer_related;
         }
 
@@ -105,9 +110,10 @@ impl ManifestParser {
         }
 
         if let Some(base) = base_url {
-            let base_url = Url::parse(base)
-                .map_err(|e| ManifestError::InvalidUrl(e.to_string()))?;
-            let resolved = base_url.join(url)
+            let base_url =
+                Url::parse(base).map_err(|e| ManifestError::InvalidUrl(e.to_string()))?;
+            let resolved = base_url
+                .join(url)
                 .map_err(|e| ManifestError::InvalidUrl(e.to_string()))?;
             Ok(resolved.to_string())
         } else {
@@ -148,16 +154,27 @@ impl ManifestParser {
         }
     }
 
-    fn parse_icons(&self, icons: &[Value], base_url: Option<&str>) -> Result<Vec<super::Icon>, ManifestError> {
+    fn parse_icons(
+        &self,
+        icons: &[Value],
+        base_url: Option<&str>,
+    ) -> Result<Vec<super::Icon>, ManifestError> {
         let mut result = Vec::new();
 
         for icon_value in icons {
             if let Some(src) = icon_value.get("src").and_then(|v| v.as_str()) {
                 let icon = super::Icon {
                     src: self.resolve_url(src, base_url)?,
-                    sizes: icon_value.get("sizes").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    icon_type: icon_value.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    purpose: icon_value.get("purpose")
+                    sizes: icon_value
+                        .get("sizes")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    icon_type: icon_value
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    purpose: icon_value
+                        .get("purpose")
                         .and_then(|v| v.as_str())
                         .and_then(|s| self.parse_icon_purpose(s).ok()),
                 };
@@ -177,15 +194,21 @@ impl ManifestParser {
         }
     }
 
-    fn parse_shortcuts(&self, shortcuts: &[Value], base_url: Option<&str>) -> Result<Vec<super::Shortcut>, ManifestError> {
+    fn parse_shortcuts(
+        &self,
+        shortcuts: &[Value],
+        base_url: Option<&str>,
+    ) -> Result<Vec<super::Shortcut>, ManifestError> {
         let mut result = Vec::new();
 
         for shortcut_value in shortcuts {
             if let (Some(name), Some(url)) = (
                 shortcut_value.get("name").and_then(|v| v.as_str()),
-                shortcut_value.get("url").and_then(|v| v.as_str())
+                shortcut_value.get("url").and_then(|v| v.as_str()),
             ) {
-                let icons = if let Some(icons_array) = shortcut_value.get("icons").and_then(|v| v.as_array()) {
+                let icons = if let Some(icons_array) =
+                    shortcut_value.get("icons").and_then(|v| v.as_array())
+                {
                     self.parse_icons(icons_array, base_url)?
                 } else {
                     Vec::new()
@@ -193,8 +216,14 @@ impl ManifestParser {
 
                 let shortcut = super::Shortcut {
                     name: name.to_string(),
-                    short_name: shortcut_value.get("short_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    description: shortcut_value.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    short_name: shortcut_value
+                        .get("short_name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    description: shortcut_value
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     url: self.resolve_url(url, base_url)?,
                     icons,
                 };
@@ -205,19 +234,33 @@ impl ManifestParser {
         Ok(result)
     }
 
-    fn parse_screenshots(&self, screenshots: &[Value], base_url: Option<&str>) -> Result<Vec<super::Screenshot>, ManifestError> {
+    fn parse_screenshots(
+        &self,
+        screenshots: &[Value],
+        base_url: Option<&str>,
+    ) -> Result<Vec<super::Screenshot>, ManifestError> {
         let mut result = Vec::new();
 
         for screenshot_value in screenshots {
             if let Some(src) = screenshot_value.get("src").and_then(|v| v.as_str()) {
                 let screenshot = super::Screenshot {
                     src: self.resolve_url(src, base_url)?,
-                    sizes: screenshot_value.get("sizes").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    screenshot_type: screenshot_value.get("type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    form_factor: screenshot_value.get("form_factor")
+                    sizes: screenshot_value
+                        .get("sizes")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    screenshot_type: screenshot_value
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    form_factor: screenshot_value
+                        .get("form_factor")
                         .and_then(|v| v.as_str())
                         .and_then(|s| self.parse_form_factor(s).ok()),
-                    label: screenshot_value.get("label").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    label: screenshot_value
+                        .get("label")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 };
                 result.push(screenshot);
             }
@@ -234,15 +277,24 @@ impl ManifestParser {
         }
     }
 
-    fn parse_related_applications(&self, related_apps: &[Value]) -> Result<Vec<super::RelatedApplication>, ManifestError> {
+    fn parse_related_applications(
+        &self,
+        related_apps: &[Value],
+    ) -> Result<Vec<super::RelatedApplication>, ManifestError> {
         let mut result = Vec::new();
 
         for app_value in related_apps {
             if let Some(platform) = app_value.get("platform").and_then(|v| v.as_str()) {
                 let app = super::RelatedApplication {
                     platform: platform.to_string(),
-                    url: app_value.get("url").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    id: app_value.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    url: app_value
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    id: app_value
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 };
                 result.push(app);
             }
@@ -253,11 +305,15 @@ impl ManifestParser {
 
     fn validate_manifest(&self, manifest: &Manifest) -> Result<(), ManifestError> {
         if manifest.name.is_empty() {
-            return Err(ManifestError::InvalidManifest("Name cannot be empty".to_string()));
+            return Err(ManifestError::InvalidManifest(
+                "Name cannot be empty".to_string(),
+            ));
         }
 
         if manifest.start_url.is_empty() {
-            return Err(ManifestError::InvalidManifest("Start URL cannot be empty".to_string()));
+            return Err(ManifestError::InvalidManifest(
+                "Start URL cannot be empty".to_string(),
+            ));
         }
 
         Ok(())

@@ -3,19 +3,21 @@ pub mod element;
 pub mod node;
 
 pub use document::{
-    Document, DocumentError, DocumentMetadata, DocumentReadyState, NodeId, MutationRecord,
-    MutationType, InlineScript,
+    Document, DocumentError, DocumentMetadata, DocumentReadyState, InlineScript, MutationRecord,
+    MutationType, NodeId,
 };
-pub use element::{Element, ElementError, DOMRect, AnimationOptions, AnimationId, ShadowRootInit, ShadowRootMode};
+pub use element::{
+    AnimationId, AnimationOptions, DOMRect, Element, ElementError, ShadowRootInit, ShadowRootMode,
+};
 pub use node::{
-    Node, NodeType, AttributeMap, ComputedStyle, LayoutData, DisplayType, PositionType, FloatType,
-    ClearType, OverflowType,
+    AttributeMap, ClearType, ComputedStyle, DisplayType, FloatType, LayoutData, Node, NodeType,
+    OverflowType, PositionType,
 };
 
-use std::sync::Arc;
-use parking_lot::RwLock;
-use thiserror::Error;
 use crate::core::dom::document::NodeType as DocumentNodeType;
+use parking_lot::RwLock;
+use std::sync::Arc;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum DOMError {
@@ -247,11 +249,17 @@ impl TreeWalker {
     }
 
     pub fn next_node(&mut self, document: &Document) -> Option<NodeId> {
-        if let Some(c) = self.first_child(document) { return Some(c); }
-        if let Some(s) = self.next_sibling(document) { return Some(s); }
+        if let Some(c) = self.first_child(document) {
+            return Some(c);
+        }
+        if let Some(s) = self.next_sibling(document) {
+            return Some(s);
+        }
         let mut curr = self.current_node;
         while let Some(p) = document.get_parent(curr) {
-            if p == self.root { break; }
+            if p == self.root {
+                break;
+            }
             self.current_node = p;
             if let Some(sib) = self.next_sibling(document) {
                 return Some(sib);
@@ -270,7 +278,9 @@ impl TreeWalker {
             return Some(self.current_node);
         }
         if let Some(p) = self.parent_node(document) {
-            if p != self.root { return Some(p); }
+            if p != self.root {
+                return Some(p);
+            }
         }
         None
     }
@@ -346,7 +356,10 @@ impl std::fmt::Debug for NodeIterator {
             .field("root", &self.root)
             .field("what_to_show", &self.what_to_show)
             .field("reference_node", &self.reference_node)
-            .field("pointer_before_reference_node", &self.pointer_before_reference_node)
+            .field(
+                "pointer_before_reference_node",
+                &self.pointer_before_reference_node,
+            )
             .finish()
     }
 }
@@ -496,6 +509,7 @@ impl DOMRange {
     }
 
     fn update_collapsed(&mut self) {
-        self.collapsed = self.start_container == self.end_container && self.start_offset == self.end_offset;
+        self.collapsed =
+            self.start_container == self.end_container && self.start_offset == self.end_offset;
     }
 }

@@ -1,15 +1,15 @@
-use std::sync::Arc;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::fs;
-use ash::vk;
-use parking_lot::{RwLock, Mutex};
-use dashmap::DashMap;
-use thiserror::Error;
-use serde::{Serialize, Deserialize};
-use ahash::AHasher;
-use std::hash::{Hash, Hasher};
 use super::device::VulkanDevice;
+use ahash::AHasher;
+use ash::vk;
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ShaderError {
@@ -218,27 +218,26 @@ impl ShaderCompiler {
         let output_file = temp_dir.join(format!("shader_{}.spv", fastrand::u64(..)));
 
         let mut full_source = String::new();
-        
+
         full_source.push_str("#version 450 core\n");
-        
+
         for (key, value) in &source.defines {
             full_source.push_str(&format!("#define {} {}\n", key, value));
         }
-        
+
         full_source.push('\n');
         full_source.push_str(&source.glsl_code);
 
         fs::write(&input_file, &full_source)
             .map_err(|e| ShaderError::Compilation(format!("Failed to write temp file: {}", e)))?;
 
-        let glslang = self.glslang_validator.as_ref()
+        let glslang = self
+            .glslang_validator
+            .as_ref()
             .ok_or_else(|| ShaderError::Compilation("glslangValidator not found".to_string()))?;
 
         let mut cmd = std::process::Command::new(glslang);
-        cmd.arg("-V")
-           .arg(&input_file)
-           .arg("-o")
-           .arg(&output_file);
+        cmd.arg("-V").arg(&input_file).arg("-o").arg(&output_file);
 
         let stage_arg = match source.stage {
             ShaderStage::Vertex => "-S vert",
@@ -247,9 +246,13 @@ impl ShaderCompiler {
             ShaderStage::TessellationControl => "-S tesc",
             ShaderStage::TessellationEvaluation => "-S tese",
             ShaderStage::Compute => "-S comp",
-            _ => return Err(ShaderError::Compilation("Unsupported shader stage".to_string())),
+            _ => {
+                return Err(ShaderError::Compilation(
+                    "Unsupported shader stage".to_string(),
+                ))
+            }
         };
-        
+
         cmd.args(stage_arg.split_whitespace());
 
         if self.debug_info_enabled {
@@ -260,18 +263,23 @@ impl ShaderCompiler {
             cmd.arg("-I").arg(include_path);
         }
 
-        let output = cmd.output()
-            .map_err(|e| ShaderError::Compilation(format!("Failed to run glslangValidator: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            ShaderError::Compilation(format!("Failed to run glslangValidator: {}", e))
+        })?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             let _ = fs::remove_file(&input_file);
             let _ = fs::remove_file(&output_file);
-            return Err(ShaderError::Compilation(format!("GLSL compilation failed: {}", error_msg)));
+            return Err(ShaderError::Compilation(format!(
+                "GLSL compilation failed: {}",
+                error_msg
+            )));
         }
 
-        let mut spirv_code = fs::read(&output_file)
-            .map_err(|e| ShaderError::Compilation(format!("Failed to read SPIR-V output: {}", e)))?;
+        let mut spirv_code = fs::read(&output_file).map_err(|e| {
+            ShaderError::Compilation(format!("Failed to read SPIR-V output: {}", e))
+        })?;
 
         let _ = fs::remove_file(&input_file);
         let _ = fs::remove_file(&output_file);
@@ -281,10 +289,13 @@ impl ShaderCompiler {
         }
 
         if spirv_code.len() % 4 != 0 {
-            return Err(ShaderError::Compilation("Invalid SPIR-V code length".to_string()));
+            return Err(ShaderError::Compilation(
+                "Invalid SPIR-V code length".to_string(),
+            ));
         }
 
-        let spirv_u32: Vec<u32> = spirv_code.chunks_exact(4)
+        let spirv_u32: Vec<u32> = spirv_code
+            .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect();
 
@@ -294,46 +305,52 @@ impl ShaderCompiler {
     }
 
     fn optimize_spirv(&self, spirv_code: &[u8], level: OptimizationLevel) -> Result<Vec<u8>> {
-        let spirv_opt = self.spirv_tools.as_ref()
+        let spirv_opt = self
+            .spirv_tools
+            .as_ref()
             .ok_or_else(|| ShaderError::Compilation("spirv-opt not found".to_string()))?;
 
         let temp_dir = std::env::temp_dir();
         let input_file = temp_dir.join(format!("shader_{}.spv", fastrand::u64(..)));
         let output_file = temp_dir.join(format!("shader_opt_{}.spv", fastrand::u64(..)));
 
-        fs::write(&input_file, spirv_code)
-            .map_err(|e| ShaderError::Compilation(format!("Failed to write temp SPIR-V file: {}", e)))?;
+        fs::write(&input_file, spirv_code).map_err(|e| {
+            ShaderError::Compilation(format!("Failed to write temp SPIR-V file: {}", e))
+        })?;
 
         let mut cmd = std::process::Command::new(spirv_opt);
-        cmd.arg(&input_file)
-           .arg("-o")
-           .arg(&output_file);
+        cmd.arg(&input_file).arg("-o").arg(&output_file);
 
         match level {
             OptimizationLevel::Size => {
                 cmd.arg("-Os");
-            },
+            }
             OptimizationLevel::Performance => {
                 cmd.arg("-O");
-            },
+            }
             OptimizationLevel::Debug => {
                 cmd.arg("-g");
-            },
-            OptimizationLevel::None => {},
+            }
+            OptimizationLevel::None => {}
         }
 
-        let output = cmd.output()
+        let output = cmd
+            .output()
             .map_err(|e| ShaderError::Compilation(format!("Failed to run spirv-opt: {}", e)))?;
 
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             let _ = fs::remove_file(&input_file);
             let _ = fs::remove_file(&output_file);
-            return Err(ShaderError::Compilation(format!("SPIR-V optimization failed: {}", error_msg)));
+            return Err(ShaderError::Compilation(format!(
+                "SPIR-V optimization failed: {}",
+                error_msg
+            )));
         }
 
-        let optimized_code = fs::read(&output_file)
-            .map_err(|e| ShaderError::Compilation(format!("Failed to read optimized SPIR-V: {}", e)))?;
+        let optimized_code = fs::read(&output_file).map_err(|e| {
+            ShaderError::Compilation(format!("Failed to read optimized SPIR-V: {}", e))
+        })?;
 
         let _ = fs::remove_file(&input_file);
         let _ = fs::remove_file(&output_file);
@@ -347,7 +364,9 @@ impl ShaderCompiler {
         }
 
         if spirv_code[0] != 0x07230203 {
-            return Err(ShaderError::Validation("Invalid SPIR-V magic number".to_string()));
+            return Err(ShaderError::Validation(
+                "Invalid SPIR-V magic number".to_string(),
+            ));
         }
 
         Ok(())
@@ -372,8 +391,9 @@ impl ShaderManager {
     pub async fn new(device: Arc<VulkanDevice>) -> Result<Self> {
         let cache_path = std::env::temp_dir().join("vulkan_browser_shader_cache");
         if !cache_path.exists() {
-            fs::create_dir_all(&cache_path)
-                .map_err(|e| ShaderError::Loading(format!("Failed to create cache directory: {}", e)))?;
+            fs::create_dir_all(&cache_path).map_err(|e| {
+                ShaderError::Loading(format!("Failed to create cache directory: {}", e))
+            })?;
         }
 
         let disk_cache = Self::load_disk_cache(&cache_path)?;
@@ -405,7 +425,7 @@ impl ShaderManager {
     fn save_disk_cache(&self) -> Result<()> {
         let cache_file = self.cache_path.join("cache.json");
         let cache_data = self.disk_cache.read();
-        
+
         let json_data = serde_json::to_string_pretty(&*cache_data)
             .map_err(|e| ShaderError::Loading(format!("Failed to serialize cache: {}", e)))?;
 
@@ -441,8 +461,11 @@ impl ShaderManager {
         let disk_cache = self.disk_cache.read();
         if let Some(cache_entry) = disk_cache.get(&source_hash) {
             let module = self.create_shader_module(&cache_entry.spirv_code)?;
-            let reflection = self.compiler.lock().reflect_spirv(&cache_entry.spirv_code)?;
-            
+            let reflection = self
+                .compiler
+                .lock()
+                .reflect_spirv(&cache_entry.spirv_code)?;
+
             let compiled_shader = CompiledShader {
                 spirv_code: cache_entry.spirv_code.clone(),
                 module,
@@ -452,7 +475,8 @@ impl ShaderManager {
                 reflection_data: reflection,
             };
 
-            self.shader_cache.insert(source_hash, compiled_shader.clone());
+            self.shader_cache
+                .insert(source_hash, compiled_shader.clone());
             return Ok(Arc::new(compiled_shader));
         }
         drop(disk_cache);
@@ -478,7 +502,8 @@ impl ShaderManager {
         };
 
         self.disk_cache.write().insert(source_hash, cache_entry);
-        self.shader_cache.insert(source_hash, compiled_shader.clone());
+        self.shader_cache
+            .insert(source_hash, compiled_shader.clone());
 
         tokio::spawn({
             let manager = Arc::new(self.clone());
@@ -491,11 +516,12 @@ impl ShaderManager {
     }
 
     fn create_shader_module(&self, spirv_code: &[u32]) -> Result<vk::ShaderModule> {
-        let create_info = vk::ShaderModuleCreateInfo::builder()
-            .code(spirv_code);
+        let create_info = vk::ShaderModuleCreateInfo::builder().code(spirv_code);
 
         unsafe {
-            self.device.logical_device().create_shader_module(&create_info, None)
+            self.device
+                .logical_device()
+                .create_shader_module(&create_info, None)
                 .map_err(|e| ShaderError::Pipeline(e.to_string()))
         }
     }
@@ -504,18 +530,25 @@ impl ShaderManager {
         &self,
         path: P,
         stage: ShaderStage,
-        entry_point: &str
+        entry_point: &str,
     ) -> Result<Arc<CompiledShader>> {
         let path = path.as_ref();
-        let glsl_code = fs::read_to_string(path)
-            .map_err(|e| ShaderError::Loading(format!("Failed to read shader file {}: {}", path.display(), e)))?;
+        let glsl_code = fs::read_to_string(path).map_err(|e| {
+            ShaderError::Loading(format!(
+                "Failed to read shader file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         if self.hot_reload_enabled {
             let metadata = fs::metadata(path)
                 .map_err(|e| ShaderError::Loading(format!("Failed to get file metadata: {}", e)))?;
-            
+
             if let Ok(modified) = metadata.modified() {
-                self.file_watchers.write().insert(path.to_path_buf(), modified);
+                self.file_watchers
+                    .write()
+                    .insert(path.to_path_buf(), modified);
             }
         }
 
@@ -540,7 +573,7 @@ impl ShaderManager {
         vertex_shader: Arc<CompiledShader>,
         fragment_shader: Arc<CompiledShader>,
         render_pass: vk::RenderPass,
-        layout: vk::PipelineLayout
+        layout: vk::PipelineLayout,
     ) -> Result<vk::Pipeline> {
         let vertex_stage_info = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::VERTEX)
@@ -573,7 +606,10 @@ impl ShaderManager {
 
         let scissor = vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D { width: 1920, height: 1080 },
+            extent: vk::Extent2D {
+                width: 1920,
+                height: 1080,
+            },
         };
 
         let viewports = [viewport];
@@ -621,11 +657,10 @@ impl ShaderManager {
             .subpass(0);
 
         let pipelines = unsafe {
-            self.device.logical_device().create_graphics_pipelines(
-                vk::PipelineCache::null(),
-                &[*pipeline_info],
-                None
-            ).map_err(|e| ShaderError::Pipeline(e.1.to_string()))?
+            self.device
+                .logical_device()
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[*pipeline_info], None)
+                .map_err(|e| ShaderError::Pipeline(e.1.to_string()))?
         };
 
         Ok(pipelines[0])
@@ -653,7 +688,12 @@ impl ShaderManager {
         Ok(changed_files)
     }
 
-    pub async fn reload_shader(&self, path: &Path, stage: ShaderStage, entry_point: &str) -> Result<Arc<CompiledShader>> {
+    pub async fn reload_shader(
+        &self,
+        path: &Path,
+        stage: ShaderStage,
+        entry_point: &str,
+    ) -> Result<Arc<CompiledShader>> {
         let old_shader_opt = {
             let watchers = self.file_watchers.read();
             if watchers.contains_key(path) {
@@ -666,17 +706,24 @@ impl ShaderManager {
         if old_shader_opt.is_some() {
             self.load_shader_from_file(path, stage, entry_point).await
         } else {
-            Err(ShaderError::HotReload(format!("Shader not watched: {}", path.display())))
+            Err(ShaderError::HotReload(format!(
+                "Shader not watched: {}",
+                path.display()
+            )))
         }
     }
 
     pub async fn get_shader_by_hash(&self, hash: u64) -> Option<Arc<CompiledShader>> {
-        self.shader_cache.get(&hash).map(|entry| Arc::new(entry.clone()))
+        self.shader_cache
+            .get(&hash)
+            .map(|entry| Arc::new(entry.clone()))
     }
 
     pub fn cleanup_shader(&self, shader: &CompiledShader) {
         unsafe {
-            self.device.logical_device().destroy_shader_module(shader.module, None);
+            self.device
+                .logical_device()
+                .destroy_shader_module(shader.module, None);
         }
     }
 
@@ -685,7 +732,9 @@ impl ShaderManager {
 
         for entry in self.shader_cache.iter() {
             unsafe {
-                self.device.logical_device().destroy_shader_module(entry.module, None);
+                self.device
+                    .logical_device()
+                    .destroy_shader_module(entry.module, None);
             }
         }
 

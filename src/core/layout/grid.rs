@@ -1,11 +1,11 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 
-use super::engine::{LayoutEngine, LayoutConstraints, LayoutResult, LayoutBox, LayoutError};
+use super::engine::{LayoutBox, LayoutConstraints, LayoutEngine, LayoutError, LayoutResult};
 use crate::core::{
+    css::{ComputedStyles, ComputedValue, StyleEngine},
     dom::{Document, NodeId},
-    css::{StyleEngine, ComputedStyles, ComputedValue},
 };
 
 #[derive(Error, Debug)]
@@ -22,8 +22,7 @@ pub enum GridError {
 
 pub type Result<T> = std::result::Result<T, GridError>;
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum TrackSize {
     Length(f32),
     Percentage(f32),
@@ -35,7 +34,6 @@ pub enum TrackSize {
     MinMax(Box<TrackSize>, Box<TrackSize>),
     FitContent(Box<TrackSize>),
 }
-
 
 #[derive(Debug, Clone)]
 pub struct GridTrack {
@@ -64,15 +62,13 @@ impl Default for GridTrack {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GridLine {
     Line(i32),
     Span(u32),
     #[default]
     Auto,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct GridArea {
@@ -120,8 +116,7 @@ impl ResolvedGridArea {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JustifyItems {
     Start,
     End,
@@ -130,9 +125,7 @@ pub enum JustifyItems {
     Stretch,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AlignItems {
     Start,
     End,
@@ -141,9 +134,7 @@ pub enum AlignItems {
     Stretch,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JustifyContent {
     #[default]
     Start,
@@ -155,9 +146,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AlignContent {
     #[default]
     Start,
@@ -168,7 +157,6 @@ pub enum AlignContent {
     SpaceAround,
     SpaceEvenly,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct GridContainer {
@@ -186,14 +174,12 @@ pub struct GridContainer {
     pub dense: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GridAutoFlow {
     #[default]
     Row,
     Column,
 }
-
 
 impl Default for GridContainer {
     fn default() -> Self {
@@ -240,28 +226,50 @@ impl GridLayout {
         generation: u64,
         layout_engine: &LayoutEngine,
     ) -> std::result::Result<LayoutResult, LayoutError> {
-        let computed_styles = style_engine.get_computed_styles(node_id)
+        let computed_styles = style_engine
+            .get_computed_styles(node_id)
             .ok_or_else(|| LayoutError::Computation("No computed styles found".to_string()))?;
 
         let mut grid_container = self.parse_grid_container(&computed_styles)?;
-        
+
         let children = document.get_children(node_id);
-        let mut grid_items = self.create_grid_items(&children, document, style_engine).await?;
+        let mut grid_items = self
+            .create_grid_items(&children, document, style_engine)
+            .await?;
 
         self.resolve_explicit_grid(&mut grid_container, &computed_styles)?;
-        
-        self.place_grid_items(&mut grid_container, &mut grid_items)?;
-        
-        self.size_grid_tracks(&mut grid_container, &grid_items, &constraints, document, style_engine, layout_engine, generation).await?;
-        
-        self.align_and_position_items(&grid_container, &mut grid_items, document, style_engine, layout_engine, generation).await?;
 
-        let layout_box = self.compute_container_box(&computed_styles, &constraints, &grid_container)?;
+        self.place_grid_items(&mut grid_container, &mut grid_items)?;
+
+        self.size_grid_tracks(
+            &mut grid_container,
+            &grid_items,
+            &constraints,
+            document,
+            style_engine,
+            layout_engine,
+            generation,
+        )
+        .await?;
+
+        self.align_and_position_items(
+            &grid_container,
+            &mut grid_items,
+            document,
+            style_engine,
+            layout_engine,
+            generation,
+        )
+        .await?;
+
+        let layout_box =
+            self.compute_container_box(&computed_styles, &constraints, &grid_container)?;
 
         let grid_width = self.calculate_grid_width(&grid_container);
         let grid_height = self.calculate_grid_height(&grid_container);
 
-        let children_overflow = grid_width > layout_box.content_width || grid_height > layout_box.content_height;
+        let children_overflow =
+            grid_width > layout_box.content_width || grid_height > layout_box.content_height;
 
         self.cache.insert(node_id, grid_container);
 
@@ -274,16 +282,29 @@ impl GridLayout {
         })
     }
 
-    fn parse_grid_container(&self, styles: &ComputedStyles) -> std::result::Result<GridContainer, LayoutError> {
+    fn parse_grid_container(
+        &self,
+        styles: &ComputedStyles,
+    ) -> std::result::Result<GridContainer, LayoutError> {
         let mut container = GridContainer::default();
 
-        container.row_gap = match styles.get_computed_value("row-gap") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        container.column_gap = match styles.get_computed_value("column-gap") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        container.row_gap = match styles.get_computed_value("row-gap") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        container.column_gap = match styles.get_computed_value("column-gap") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
 
         if let Ok(gap) = styles.get_computed_value("gap") {
             if let ComputedValue::Length(gap_val) = gap {
-                if container.row_gap == 0.0 { container.row_gap = gap_val; }
-                if container.column_gap == 0.0 { container.column_gap = gap_val; }
+                if container.row_gap == 0.0 {
+                    container.row_gap = gap_val;
+                }
+                if container.column_gap == 0.0 {
+                    container.column_gap = gap_val;
+                }
             }
         }
 
@@ -298,73 +319,80 @@ impl GridLayout {
         Ok(container)
     }
 
-    fn parse_justify_items(&self, styles: &ComputedStyles) -> std::result::Result<JustifyItems, LayoutError> {
+    fn parse_justify_items(
+        &self,
+        styles: &ComputedStyles,
+    ) -> std::result::Result<JustifyItems, LayoutError> {
         match styles.get_computed_value("justify-items") {
-            Ok(ComputedValue::Keyword(keyword)) => {
-                match keyword.as_str() {
-                    "start" => Ok(JustifyItems::Start),
-                    "end" => Ok(JustifyItems::End),
-                    "center" => Ok(JustifyItems::Center),
-                    "stretch" => Ok(JustifyItems::Stretch),
-                    _ => Ok(JustifyItems::Stretch),
-                }
-            }
+            Ok(ComputedValue::Keyword(keyword)) => match keyword.as_str() {
+                "start" => Ok(JustifyItems::Start),
+                "end" => Ok(JustifyItems::End),
+                "center" => Ok(JustifyItems::Center),
+                "stretch" => Ok(JustifyItems::Stretch),
+                _ => Ok(JustifyItems::Stretch),
+            },
             _ => Ok(JustifyItems::Stretch),
         }
     }
 
-    fn parse_align_items(&self, styles: &ComputedStyles) -> std::result::Result<AlignItems, LayoutError> {
+    fn parse_align_items(
+        &self,
+        styles: &ComputedStyles,
+    ) -> std::result::Result<AlignItems, LayoutError> {
         match styles.get_computed_value("align-items") {
-            Ok(ComputedValue::Keyword(keyword)) => {
-                match keyword.as_str() {
-                    "start" => Ok(AlignItems::Start),
-                    "end" => Ok(AlignItems::End),
-                    "center" => Ok(AlignItems::Center),
-                    "stretch" => Ok(AlignItems::Stretch),
-                    _ => Ok(AlignItems::Stretch),
-                }
-            }
+            Ok(ComputedValue::Keyword(keyword)) => match keyword.as_str() {
+                "start" => Ok(AlignItems::Start),
+                "end" => Ok(AlignItems::End),
+                "center" => Ok(AlignItems::Center),
+                "stretch" => Ok(AlignItems::Stretch),
+                _ => Ok(AlignItems::Stretch),
+            },
             _ => Ok(AlignItems::Stretch),
         }
     }
 
-    fn parse_justify_content(&self, styles: &ComputedStyles) -> std::result::Result<JustifyContent, LayoutError> {
+    fn parse_justify_content(
+        &self,
+        styles: &ComputedStyles,
+    ) -> std::result::Result<JustifyContent, LayoutError> {
         match styles.get_computed_value("justify-content") {
-            Ok(ComputedValue::Keyword(keyword)) => {
-                match keyword.as_str() {
-                    "start" => Ok(JustifyContent::Start),
-                    "end" => Ok(JustifyContent::End),
-                    "center" => Ok(JustifyContent::Center),
-                    "stretch" => Ok(JustifyContent::Stretch),
-                    "space-between" => Ok(JustifyContent::SpaceBetween),
-                    "space-around" => Ok(JustifyContent::SpaceAround),
-                    "space-evenly" => Ok(JustifyContent::SpaceEvenly),
-                    _ => Ok(JustifyContent::Start),
-                }
-            }
+            Ok(ComputedValue::Keyword(keyword)) => match keyword.as_str() {
+                "start" => Ok(JustifyContent::Start),
+                "end" => Ok(JustifyContent::End),
+                "center" => Ok(JustifyContent::Center),
+                "stretch" => Ok(JustifyContent::Stretch),
+                "space-between" => Ok(JustifyContent::SpaceBetween),
+                "space-around" => Ok(JustifyContent::SpaceAround),
+                "space-evenly" => Ok(JustifyContent::SpaceEvenly),
+                _ => Ok(JustifyContent::Start),
+            },
             _ => Ok(JustifyContent::Start),
         }
     }
 
-    fn parse_align_content(&self, styles: &ComputedStyles) -> std::result::Result<AlignContent, LayoutError> {
+    fn parse_align_content(
+        &self,
+        styles: &ComputedStyles,
+    ) -> std::result::Result<AlignContent, LayoutError> {
         match styles.get_computed_value("align-content") {
-            Ok(ComputedValue::Keyword(keyword)) => {
-                match keyword.as_str() {
-                    "start" => Ok(AlignContent::Start),
-                    "end" => Ok(AlignContent::End),
-                    "center" => Ok(AlignContent::Center),
-                    "stretch" => Ok(AlignContent::Stretch),
-                    "space-between" => Ok(AlignContent::SpaceBetween),
-                    "space-around" => Ok(AlignContent::SpaceAround),
-                    "space-evenly" => Ok(AlignContent::SpaceEvenly),
-                    _ => Ok(AlignContent::Start),
-                }
-            }
+            Ok(ComputedValue::Keyword(keyword)) => match keyword.as_str() {
+                "start" => Ok(AlignContent::Start),
+                "end" => Ok(AlignContent::End),
+                "center" => Ok(AlignContent::Center),
+                "stretch" => Ok(AlignContent::Stretch),
+                "space-between" => Ok(AlignContent::SpaceBetween),
+                "space-around" => Ok(AlignContent::SpaceAround),
+                "space-evenly" => Ok(AlignContent::SpaceEvenly),
+                _ => Ok(AlignContent::Start),
+            },
             _ => Ok(AlignContent::Start),
         }
     }
 
-    fn parse_grid_auto_flow(&self, styles: &ComputedStyles) -> std::result::Result<GridAutoFlow, LayoutError> {
+    fn parse_grid_auto_flow(
+        &self,
+        styles: &ComputedStyles,
+    ) -> std::result::Result<GridAutoFlow, LayoutError> {
         match styles.get_computed_value("grid-auto-flow") {
             Ok(ComputedValue::Keyword(keyword)) => {
                 if keyword.contains("column") {
@@ -395,7 +423,10 @@ impl GridLayout {
         for &child_id in children {
             if let Some(computed_styles) = style_engine.get_computed_styles(child_id) {
                 let area = self.parse_grid_area(&computed_styles)?;
-                let order = match computed_styles.get_computed_value("order") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,} as i32;
+                let order = match computed_styles.get_computed_value("order") {
+                    Ok(ComputedValue::Length(v)) => v,
+                    _ => 0.0,
+                } as i32;
 
                 items.push(GridItem {
                     node_id: child_id,
@@ -412,7 +443,10 @@ impl GridLayout {
         Ok(items)
     }
 
-    fn parse_grid_area(&self, styles: &ComputedStyles) -> std::result::Result<GridArea, LayoutError> {
+    fn parse_grid_area(
+        &self,
+        styles: &ComputedStyles,
+    ) -> std::result::Result<GridArea, LayoutError> {
         let mut area = GridArea::default();
 
         if let Ok(value) = styles.get_computed_value("grid-area") {
@@ -428,12 +462,19 @@ impl GridLayout {
         Ok(area)
     }
 
-    fn parse_grid_area_shorthand(&self, _value: &ComputedValue) -> std::result::Result<GridArea, LayoutError> {
+    fn parse_grid_area_shorthand(
+        &self,
+        _value: &ComputedValue,
+    ) -> std::result::Result<GridArea, LayoutError> {
         // Simplified parsing - in a real implementation, this would be more comprehensive
         Ok(GridArea::default())
     }
 
-    fn parse_grid_line(&self, styles: &ComputedStyles, property: &str) -> std::result::Result<GridLine, LayoutError> {
+    fn parse_grid_line(
+        &self,
+        styles: &ComputedStyles,
+        property: &str,
+    ) -> std::result::Result<GridLine, LayoutError> {
         match styles.get_computed_value(property) {
             Ok(ComputedValue::Integer(line)) => Ok(GridLine::Line(line)),
             Ok(ComputedValue::Keyword(keyword)) => {
@@ -477,7 +518,10 @@ impl GridLayout {
         Ok(())
     }
 
-    fn parse_track_list(&self, value: &ComputedValue) -> std::result::Result<Vec<GridTrack>, LayoutError> {
+    fn parse_track_list(
+        &self,
+        value: &ComputedValue,
+    ) -> std::result::Result<Vec<GridTrack>, LayoutError> {
         let mut tracks = Vec::new();
 
         match value {
@@ -502,50 +546,49 @@ impl GridLayout {
         Ok(tracks)
     }
 
-    fn parse_track_size(&self, value: &ComputedValue) -> std::result::Result<TrackSize, LayoutError> {
+    fn parse_track_size(
+        &self,
+        value: &ComputedValue,
+    ) -> std::result::Result<TrackSize, LayoutError> {
         match value {
             ComputedValue::Length(length) => Ok(TrackSize::Length(*length)),
             ComputedValue::Percentage(percentage) => Ok(TrackSize::Percentage(*percentage)),
-            ComputedValue::Keyword(keyword) => {
-                match keyword.as_str() {
-                    "auto" => Ok(TrackSize::Auto),
-                    "min-content" => Ok(TrackSize::MinContent),
-                    "max-content" => Ok(TrackSize::MaxContent),
-                    _ => {
-                        if keyword.ends_with("fr") {
-                            if let Ok(fr) = keyword.trim_end_matches("fr").parse::<f32>() {
-                                Ok(TrackSize::Fr(fr))
-                            } else {
-                                Ok(TrackSize::Auto)
-                            }
+            ComputedValue::Keyword(keyword) => match keyword.as_str() {
+                "auto" => Ok(TrackSize::Auto),
+                "min-content" => Ok(TrackSize::MinContent),
+                "max-content" => Ok(TrackSize::MaxContent),
+                _ => {
+                    if keyword.ends_with("fr") {
+                        if let Ok(fr) = keyword.trim_end_matches("fr").parse::<f32>() {
+                            Ok(TrackSize::Fr(fr))
                         } else {
                             Ok(TrackSize::Auto)
                         }
+                    } else {
+                        Ok(TrackSize::Auto)
                     }
                 }
-            }
-            ComputedValue::Function { name, args } => {
-                match name.as_str() {
-                    "minmax" => {
-                        if args.len() == 2 {
-                            let min_size = self.parse_track_size(&args[0])?;
-                            let max_size = self.parse_track_size(&args[1])?;
-                            Ok(TrackSize::MinMax(Box::new(min_size), Box::new(max_size)))
-                        } else {
-                            Ok(TrackSize::Auto)
-                        }
+            },
+            ComputedValue::Function { name, args } => match name.as_str() {
+                "minmax" => {
+                    if args.len() == 2 {
+                        let min_size = self.parse_track_size(&args[0])?;
+                        let max_size = self.parse_track_size(&args[1])?;
+                        Ok(TrackSize::MinMax(Box::new(min_size), Box::new(max_size)))
+                    } else {
+                        Ok(TrackSize::Auto)
                     }
-                    "fit-content" => {
-                        if args.len() == 1 {
-                            let size = self.parse_track_size(&args[0])?;
-                            Ok(TrackSize::FitContent(Box::new(size)))
-                        } else {
-                            Ok(TrackSize::Auto)
-                        }
-                    }
-                    _ => Ok(TrackSize::Auto),
                 }
-            }
+                "fit-content" => {
+                    if args.len() == 1 {
+                        let size = self.parse_track_size(&args[0])?;
+                        Ok(TrackSize::FitContent(Box::new(size)))
+                    } else {
+                        Ok(TrackSize::Auto)
+                    }
+                }
+                _ => Ok(TrackSize::Auto),
+            },
             _ => Ok(TrackSize::Auto),
         }
     }
@@ -577,10 +620,14 @@ impl GridLayout {
     ) -> std::result::Result<ResolvedGridArea, LayoutError> {
         let mut resolved = ResolvedGridArea::default();
 
-        resolved.row_start = self.resolve_grid_line(&area.row_start, container.row_tracks.len(), true)?;
-        resolved.row_end = self.resolve_grid_line(&area.row_end, container.row_tracks.len(), true)?;
-        resolved.column_start = self.resolve_grid_line(&area.column_start, container.column_tracks.len(), false)?;
-        resolved.column_end = self.resolve_grid_line(&area.column_end, container.column_tracks.len(), false)?;
+        resolved.row_start =
+            self.resolve_grid_line(&area.row_start, container.row_tracks.len(), true)?;
+        resolved.row_end =
+            self.resolve_grid_line(&area.row_end, container.row_tracks.len(), true)?;
+        resolved.column_start =
+            self.resolve_grid_line(&area.column_start, container.column_tracks.len(), false)?;
+        resolved.column_end =
+            self.resolve_grid_line(&area.column_end, container.column_tracks.len(), false)?;
 
         if resolved.row_start >= resolved.row_end {
             resolved.row_end = resolved.row_start + 1;
@@ -610,9 +657,7 @@ impl GridLayout {
                     Ok(0)
                 }
             }
-            GridLine::Span(span) => {
-                Ok(*span)
-            }
+            GridLine::Span(span) => Ok(*span),
             GridLine::Auto => Ok(0),
         }
     }
@@ -649,7 +694,15 @@ impl GridLayout {
         self.initialize_track_sizes(&mut container.column_tracks, available_width);
         self.initialize_track_sizes(&mut container.row_tracks, available_height);
 
-        self.resolve_intrinsic_track_sizes(container, items, document, style_engine, layout_engine, generation).await?;
+        self.resolve_intrinsic_track_sizes(
+            container,
+            items,
+            document,
+            style_engine,
+            layout_engine,
+            generation,
+        )
+        .await?;
 
         self.maximize_tracks(&mut container.column_tracks);
         self.maximize_tracks(&mut container.row_tracks);
@@ -715,17 +768,22 @@ impl GridLayout {
         // Simplified intrinsic sizing - real implementation would be more comprehensive
         for item in items {
             let constraints = LayoutConstraints::default();
-            
-            if let Ok(layout_result) = layout_engine.layout_node_public(
-                item.node_id,
-                constraints,
-                document,
-                style_engine,
-                generation,
-            ).await {
+
+            if let Ok(layout_result) = layout_engine
+                .layout_node_public(
+                    item.node_id,
+                    constraints,
+                    document,
+                    style_engine,
+                    generation,
+                )
+                .await
+            {
                 let area = &item.resolved_area;
-                
-                if area.column_span() == 1 && (area.column_start as usize) < container.column_tracks.len() {
+
+                if area.column_span() == 1
+                    && (area.column_start as usize) < container.column_tracks.len()
+                {
                     let track = &mut container.column_tracks[area.column_start as usize];
                     track.base_size = track.base_size.max(layout_result.layout_box.content_width);
                 }
@@ -749,14 +807,16 @@ impl GridLayout {
     }
 
     fn expand_flexible_tracks(&self, tracks: &mut [GridTrack], available_space: f32) {
-        let fixed_space: f32 = tracks.iter()
+        let fixed_space: f32 = tracks
+            .iter()
             .filter(|t| !matches!(t.size, TrackSize::Fr(_)))
             .map(|t| t.base_size)
             .sum();
 
         let remaining_space = (available_space - fixed_space).max(0.0);
-        
-        let total_fr: f32 = tracks.iter()
+
+        let total_fr: f32 = tracks
+            .iter()
             .filter_map(|t| match &t.size {
                 TrackSize::Fr(fr) => Some(*fr),
                 _ => None,
@@ -765,7 +825,7 @@ impl GridLayout {
 
         if total_fr > 0.0 {
             let fr_size = remaining_space / total_fr;
-            
+
             for track in tracks.iter_mut() {
                 if let TrackSize::Fr(fr) = &track.size {
                     track.base_size = fr * fr_size;
@@ -786,28 +846,38 @@ impl GridLayout {
     ) -> std::result::Result<(), LayoutError> {
         for item in items.iter_mut() {
             let item_constraints = self.calculate_item_constraints(container, &item.resolved_area);
-            
-            let layout_result = layout_engine.layout_node_public(
-                item.node_id,
-                item_constraints,
-                document,
-                style_engine,
-                generation,
-            ).await?;
 
-            let position = self.calculate_item_position(container, &item.resolved_area, &layout_result.layout_box);
-            
+            let layout_result = layout_engine
+                .layout_node_public(
+                    item.node_id,
+                    item_constraints,
+                    document,
+                    style_engine,
+                    generation,
+                )
+                .await?;
+
+            let position = self.calculate_item_position(
+                container,
+                &item.resolved_area,
+                &layout_result.layout_box,
+            );
+
             let mut positioned_result = layout_result;
             positioned_result.layout_box.content_x = position.0;
             positioned_result.layout_box.content_y = position.1;
-            
+
             item.layout_result = Some(positioned_result);
         }
 
         Ok(())
     }
 
-    fn calculate_item_constraints(&self, container: &GridContainer, area: &ResolvedGridArea) -> LayoutConstraints {
+    fn calculate_item_constraints(
+        &self,
+        container: &GridContainer,
+        area: &ResolvedGridArea,
+    ) -> LayoutConstraints {
         let mut width = 0.0;
         let mut height = 0.0;
 
@@ -836,7 +906,12 @@ impl GridLayout {
         }
     }
 
-    fn calculate_item_position(&self, container: &GridContainer, area: &ResolvedGridArea, item_box: &LayoutBox) -> (f32, f32) {
+    fn calculate_item_position(
+        &self,
+        container: &GridContainer,
+        area: &ResolvedGridArea,
+        item_box: &LayoutBox,
+    ) -> (f32, f32) {
         let mut x = 0.0;
         let mut y = 0.0;
 
@@ -858,17 +933,17 @@ impl GridLayout {
         let cell_height = self.calculate_cell_height(container, area);
 
         match container.justify_items {
-            JustifyItems::Start => {},
+            JustifyItems::Start => {}
             JustifyItems::End => x += cell_width - item_box.content_width,
             JustifyItems::Center => x += (cell_width - item_box.content_width) / 2.0,
-            JustifyItems::Stretch => {},
+            JustifyItems::Stretch => {}
         }
 
         match container.align_items {
-            AlignItems::Start => {},
+            AlignItems::Start => {}
             AlignItems::End => y += cell_height - item_box.content_height,
             AlignItems::Center => y += (cell_height - item_box.content_height) / 2.0,
-            AlignItems::Stretch => {},
+            AlignItems::Stretch => {}
         }
 
         (x, y)
@@ -912,20 +987,56 @@ impl GridLayout {
         let content_width = constraints.available_width.unwrap_or(grid_width);
         let content_height = constraints.available_height.unwrap_or(grid_height);
 
-        let padding_top = match computed_styles.get_computed_value("padding_top") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let padding_right = match computed_styles.get_computed_value("padding_right") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let padding_bottom = match computed_styles.get_computed_value("padding_bottom") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let padding_left = match computed_styles.get_computed_value("padding_left") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let padding_top = match computed_styles.get_computed_value("padding_top") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let padding_right = match computed_styles.get_computed_value("padding_right") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let padding_bottom = match computed_styles.get_computed_value("padding_bottom") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let padding_left = match computed_styles.get_computed_value("padding_left") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
 
-        let border_top = match computed_styles.get_computed_value("border-top-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let border_right = match computed_styles.get_computed_value("border-right-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let border_bottom = match computed_styles.get_computed_value("border-bottom-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let border_left = match computed_styles.get_computed_value("border-left-width") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let border_top = match computed_styles.get_computed_value("border-top-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let border_right = match computed_styles.get_computed_value("border-right-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let border_bottom = match computed_styles.get_computed_value("border-bottom-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let border_left = match computed_styles.get_computed_value("border-left-width") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
 
-        let margin_top = match computed_styles.get_computed_value("margin_top") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let margin_right = match computed_styles.get_computed_value("margin_right") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let margin_bottom = match computed_styles.get_computed_value("margin_bottom") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
-        let margin_left = match computed_styles.get_computed_value("margin_left") {Ok(ComputedValue::Length(v)) => v, _ => 0.0,};
+        let margin_top = match computed_styles.get_computed_value("margin_top") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let margin_right = match computed_styles.get_computed_value("margin_right") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let margin_bottom = match computed_styles.get_computed_value("margin_bottom") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
+        let margin_left = match computed_styles.get_computed_value("margin_left") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
 
         Ok(LayoutBox {
             content_x: margin_left + border_left + padding_left,

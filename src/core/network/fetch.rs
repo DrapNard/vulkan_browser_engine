@@ -1,4 +1,4 @@
-use reqwest::{Client};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -79,15 +79,19 @@ impl FetchEngine {
         }
     }
 
-    pub async fn fetch(&self, url: &str, options: FetchOptions) -> Result<FetchResponse, FetchError> {
+    pub async fn fetch(
+        &self,
+        url: &str,
+        options: FetchOptions,
+    ) -> Result<FetchResponse, FetchError> {
         let parsed_url = Url::parse(url).map_err(FetchError::InvalidUrl)?;
-        
+
         if let Some(cached) = self.cache.get(&parsed_url, &options).await {
             return Ok(cached);
         }
 
         let response = self.execute_request(&parsed_url, &options).await?;
-        
+
         if options.cache != CacheMode::NoStore {
             self.cache.store(&parsed_url, &options, &response).await;
         }
@@ -95,7 +99,11 @@ impl FetchEngine {
         Ok(response)
     }
 
-    async fn execute_request(&self, url: &Url, options: &FetchOptions) -> Result<FetchResponse, FetchError> {
+    async fn execute_request(
+        &self,
+        url: &Url,
+        options: &FetchOptions,
+    ) -> Result<FetchResponse, FetchError> {
         let mut request = match options.method {
             HttpMethod::Get => self.client.get(url.as_str()),
             HttpMethod::Post => self.client.post(url.as_str()),
@@ -120,15 +128,17 @@ impl FetchEngine {
             .map_err(FetchError::RequestError)?;
 
         let status = response.status().as_u16();
-        let headers = response.headers()
+        let headers = response
+            .headers()
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
-        
+
         let final_url = response.url().clone();
         let redirected = final_url != *url;
-        
-        let body = response.bytes()
+
+        let body = response
+            .bytes()
             .await
             .map_err(FetchError::RequestError)?
             .to_vec();
@@ -182,7 +192,7 @@ impl ResponseCache {
 
         let cache = self.cache.read().await;
         let key = self.cache_key(url, options);
-        
+
         if let Some(entry) = cache.get(&key) {
             if entry.expires > std::time::Instant::now() {
                 return Some(FetchResponse {
@@ -201,21 +211,24 @@ impl ResponseCache {
     async fn store(&self, url: &Url, options: &FetchOptions, response: &FetchResponse) {
         let mut cache = self.cache.write().await;
         let key = self.cache_key(url, options);
-        
+
         let expires = std::time::Instant::now() + Duration::from_secs(300);
         let etag = response.headers.get("etag").cloned();
-        
-        cache.insert(key, CacheEntry {
-            response: FetchResponse {
-                status: response.status,
-                headers: response.headers.clone(),
-                body: response.body.clone(),
-                url: response.url.clone(),
-                redirected: response.redirected,
+
+        cache.insert(
+            key,
+            CacheEntry {
+                response: FetchResponse {
+                    status: response.status,
+                    headers: response.headers.clone(),
+                    body: response.body.clone(),
+                    url: response.url.clone(),
+                    redirected: response.redirected,
+                },
+                expires,
+                etag,
             },
-            expires,
-            etag,
-        });
+        );
     }
 
     fn cache_key(&self, url: &Url, options: &FetchOptions) -> String {

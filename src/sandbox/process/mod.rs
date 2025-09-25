@@ -156,7 +156,7 @@ impl SandboxedProcess {
 
         let mut command = Command::new(&self.config.executable_path);
         command.args(&self.config.arguments);
-        
+
         for (key, value) in &self.config.environment {
             command.env(key, value);
         }
@@ -165,17 +165,21 @@ impl SandboxedProcess {
             command.current_dir(wd);
         }
 
-        command.stdin(Stdio::null())
+        command
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        self.isolation_manager.apply_restrictions(&mut command).await?;
+        self.isolation_manager
+            .apply_restrictions(&mut command)
+            .await?;
 
-        let child = command.spawn()
+        let child = command
+            .spawn()
             .map_err(|e| ProcessError::SpawnFailed(e.to_string()))?;
 
         let pid = child.id().ok_or(ProcessError::InvalidPid)?;
-        
+
         {
             let mut stats = self.stats.write().await;
             stats.pid = Some(pid);
@@ -183,14 +187,14 @@ impl SandboxedProcess {
         }
 
         self.handle = Some(child);
-        
+
         {
             let mut status = self.status.write().await;
             *status = ProcessStatus::Running;
         }
 
         self.start_monitoring().await;
-        
+
         Ok(())
     }
 
@@ -201,10 +205,14 @@ impl SandboxedProcess {
         }
 
         if let Some(ref mut child) = self.handle {
-            child.kill().await
+            child
+                .kill()
+                .await
                 .map_err(|e| ProcessError::TerminationFailed(e.to_string()))?;
-            
-            let exit_status = child.wait().await
+
+            let exit_status = child
+                .wait()
+                .await
                 .map_err(|e| ProcessError::WaitFailed(e.to_string()))?;
 
             {
@@ -224,12 +232,12 @@ impl SandboxedProcess {
     pub async fn suspend(&mut self) -> Result<(), ProcessError> {
         if let Some(ref child) = self.handle {
             let _pid = child.id().ok_or(ProcessError::InvalidPid)?;
-            
+
             #[cfg(unix)]
             unsafe {
                 libc::kill(_pid as i32, libc::SIGSTOP);
             }
-            
+
             let mut status = self.status.write().await;
             *status = ProcessStatus::Suspended;
         }
@@ -239,12 +247,12 @@ impl SandboxedProcess {
     pub async fn resume(&mut self) -> Result<(), ProcessError> {
         if let Some(ref child) = self.handle {
             let _pid = child.id().ok_or(ProcessError::InvalidPid)?;
-            
+
             #[cfg(unix)]
             unsafe {
                 libc::kill(_pid as i32, libc::SIGCONT);
             }
-            
+
             let mut status = self.status.write().await;
             *status = ProcessStatus::Running;
         }
@@ -262,12 +270,15 @@ impl SandboxedProcess {
         if let Some(pid) = pid {
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-                
+
                 loop {
                     interval.tick().await;
-                    
+
                     let current_status = *status.read().await;
-                    if matches!(current_status, ProcessStatus::Terminated | ProcessStatus::Failed) {
+                    if matches!(
+                        current_status,
+                        ProcessStatus::Terminated | ProcessStatus::Failed
+                    ) {
                         break;
                     }
 
@@ -276,7 +287,7 @@ impl SandboxedProcess {
                         stats_guard.memory_usage_bytes = process_info.memory_bytes;
                         stats_guard.cpu_usage_percent = process_info.cpu_percent;
                         stats_guard.thread_count = process_info.thread_count;
-                        
+
                         if let Some(start_time) = stats_guard.start_time {
                             stats_guard.execution_time = start_time.elapsed();
                         }
@@ -291,15 +302,17 @@ impl SandboxedProcess {
         {
             let stat_path = format!("/proc/{}/stat", _pid);
             let status_path = format!("/proc/{}/status", _pid);
-            
-            let stat_content = tokio::fs::read_to_string(stat_path).await
+
+            let stat_content = tokio::fs::read_to_string(stat_path)
+                .await
                 .map_err(|_| ProcessError::MonitoringFailed)?;
-            let status_content = tokio::fs::read_to_string(status_path).await
+            let status_content = tokio::fs::read_to_string(status_path)
+                .await
                 .map_err(|_| ProcessError::MonitoringFailed)?;
 
             Ok(ProcessInfo::parse_linux_proc(stat_content, status_content)?)
         }
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             Ok(ProcessInfo {
@@ -343,7 +356,8 @@ impl SandboxedProcess {
     }
 
     pub fn send_command(&self, command: ProcessCommand) -> Result<(), ProcessError> {
-        self.command_sender.send(command)
+        self.command_sender
+            .send(command)
             .map_err(|_| ProcessError::CommandSendFailed)
     }
 }
@@ -358,12 +372,8 @@ impl IsolationManager {
         };
 
         let seccomp_filter = match isolation_level {
-            IsolationLevel::Maximum => {
-                Some(SeccompFilter::strict())
-            }
-            IsolationLevel::Strict => {
-                Some(SeccompFilter::moderate())
-            }
+            IsolationLevel::Maximum => Some(SeccompFilter::strict()),
+            IsolationLevel::Strict => Some(SeccompFilter::moderate()),
             _ => None,
         };
 
@@ -468,7 +478,10 @@ struct ProcessInfo {
 
 impl ProcessInfo {
     #[cfg(target_os = "linux")]
-    fn parse_linux_proc(stat_content: String, status_content: String) -> Result<Self, ProcessError> {
+    fn parse_linux_proc(
+        stat_content: String,
+        status_content: String,
+    ) -> Result<Self, ProcessError> {
         let mut memory_bytes = 0;
         let mut thread_count = 1;
 

@@ -71,7 +71,12 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn rasterization(mut self, polygon_mode: vk::PolygonMode, cull_mode: vk::CullModeFlags, front_face: vk::FrontFace) -> Self {
+    pub fn rasterization(
+        mut self,
+        polygon_mode: vk::PolygonMode,
+        cull_mode: vk::CullModeFlags,
+        front_face: vk::FrontFace,
+    ) -> Self {
         self.rasterization = Some(
             vk::PipelineRasterizationStateCreateInfo::builder()
                 .depth_clamp_enable(false)
@@ -97,7 +102,10 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn build_color_blending(&self, blend_enable: bool) -> Result<vk::PipelineColorBlendStateCreateInfo, PipelineError> {
+    pub fn build_color_blending(
+        &self,
+        blend_enable: bool,
+    ) -> Result<vk::PipelineColorBlendStateCreateInfo, PipelineError> {
         let color_blend_attachment = if blend_enable {
             vk::PipelineColorBlendAttachmentState::builder()
                 .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -117,7 +125,7 @@ impl PipelineBuilder {
         };
 
         let color_blend_attachments = vec![color_blend_attachment];
-        
+
         Ok(vk::PipelineColorBlendStateCreateInfo::builder()
             .logic_op_enable(false)
             .logic_op(vk::LogicOp::COPY)
@@ -131,7 +139,12 @@ impl PipelineBuilder {
         Ok(self)
     }
 
-    pub fn depth_stencil(mut self, depth_test: bool, depth_write: bool, compare_op: vk::CompareOp) -> Self {
+    pub fn depth_stencil(
+        mut self,
+        depth_test: bool,
+        depth_write: bool,
+        compare_op: vk::CompareOp,
+    ) -> Self {
         self.depth_stencil = Some(
             vk::PipelineDepthStencilStateCreateInfo::builder()
                 .depth_test_enable(depth_test)
@@ -151,9 +164,15 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn add_shader_stage(mut self, stage: vk::ShaderStageFlags, module: vk::ShaderModule, entry_point: &str) -> Result<Self, PipelineError> {
-        let entry_name = std::ffi::CString::new(entry_point)
-            .map_err(|_| PipelineError::ShaderCompilationError("Invalid entry point name".to_string()))?;
+    pub fn add_shader_stage(
+        mut self,
+        stage: vk::ShaderStageFlags,
+        module: vk::ShaderModule,
+        entry_point: &str,
+    ) -> Result<Self, PipelineError> {
+        let entry_name = std::ffi::CString::new(entry_point).map_err(|_| {
+            PipelineError::ShaderCompilationError("Invalid entry point name".to_string())
+        })?;
 
         let stage_info = vk::PipelineShaderStageCreateInfo::builder()
             .stage(stage)
@@ -177,9 +196,9 @@ impl PipelineBuilder {
     }
 
     pub fn build_graphics(self) -> Result<vk::Pipeline, PipelineError> {
-        let vertex_input = self.vertex_input.unwrap_or_else(|| {
-            vk::PipelineVertexInputStateCreateInfo::builder().build()
-        });
+        let vertex_input = self
+            .vertex_input
+            .unwrap_or_else(|| vk::PipelineVertexInputStateCreateInfo::builder().build());
 
         let input_assembly = self.input_assembly.unwrap_or_else(|| {
             vk::PipelineInputAssemblyStateCreateInfo::builder()
@@ -212,12 +231,10 @@ impl PipelineBuilder {
                 .build()
         });
 
-        let color_blend_attachments = vec![
-            vk::PipelineColorBlendAttachmentState::builder()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(false)
-                .build()
-        ];
+        let color_blend_attachments = vec![vk::PipelineColorBlendAttachmentState::builder()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false)
+            .build()];
 
         let color_blending = self.color_blend.unwrap_or_else(|| {
             vk::PipelineColorBlendStateCreateInfo::builder()
@@ -229,15 +246,23 @@ impl PipelineBuilder {
         });
 
         let dynamic_state = if !self.dynamic_states.is_empty() {
-            Some(vk::PipelineDynamicStateCreateInfo::builder()
-                .dynamic_states(&self.dynamic_states)
-                .build())
+            Some(
+                vk::PipelineDynamicStateCreateInfo::builder()
+                    .dynamic_states(&self.dynamic_states)
+                    .build(),
+            )
         } else {
             None
         };
 
-        let layout = self.layout.ok_or(PipelineError::PipelineCreationError("Pipeline layout not set".to_string()))?;
-        let render_pass = self.render_pass.ok_or(PipelineError::PipelineCreationError("Render pass not set".to_string()))?;
+        let layout = self.layout.ok_or(PipelineError::PipelineCreationError(
+            "Pipeline layout not set".to_string(),
+        ))?;
+        let render_pass = self
+            .render_pass
+            .ok_or(PipelineError::PipelineCreationError(
+                "Render pass not set".to_string(),
+            ))?;
 
         let mut pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(&self.shader_stages)
@@ -273,15 +298,21 @@ impl PipelineBuilder {
 
     pub fn build_compute(self) -> Result<vk::Pipeline, PipelineError> {
         if self.shader_stages.len() != 1 {
-            return Err(PipelineError::PipelineCreationError("Compute pipeline requires exactly one shader stage".to_string()));
+            return Err(PipelineError::PipelineCreationError(
+                "Compute pipeline requires exactly one shader stage".to_string(),
+            ));
         }
 
         let compute_stage = &self.shader_stages[0];
         if compute_stage.stage != vk::ShaderStageFlags::COMPUTE {
-            return Err(PipelineError::PipelineCreationError("Compute pipeline requires compute shader stage".to_string()));
+            return Err(PipelineError::PipelineCreationError(
+                "Compute pipeline requires compute shader stage".to_string(),
+            ));
         }
 
-        let layout = self.layout.ok_or(PipelineError::PipelineCreationError("Pipeline layout not set".to_string()))?;
+        let layout = self.layout.ok_or(PipelineError::PipelineCreationError(
+            "Pipeline layout not set".to_string(),
+        ))?;
 
         let pipeline_info = vk::ComputePipelineCreateInfo::builder()
             .stage(*compute_stage)
@@ -290,11 +321,7 @@ impl PipelineBuilder {
 
         unsafe {
             self.device
-                .create_compute_pipelines(
-                    vk::PipelineCache::null(),
-                    &[pipeline_info],
-                    None,
-                )
+                .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
                 .map_err(|e| PipelineError::VulkanError(e.1))
                 .map(|pipelines| pipelines[0])
         }
@@ -318,15 +345,15 @@ impl PipelineManager {
         })
     }
 
-    fn create_default_pipeline_layout(device: &ash::Device) -> Result<vk::PipelineLayout, PipelineError> {
+    fn create_default_pipeline_layout(
+        device: &ash::Device,
+    ) -> Result<vk::PipelineLayout, PipelineError> {
         let descriptor_set_layouts = [];
-        let push_constant_ranges = [
-            vk::PushConstantRange::builder()
-                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-                .offset(0)
-                .size(128)
-                .build(),
-        ];
+        let push_constant_ranges = [vk::PushConstantRange::builder()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(128)
+            .build()];
 
         let layout_info = vk::PipelineLayoutCreateInfo::builder()
             .set_layouts(&descriptor_set_layouts)
@@ -361,16 +388,22 @@ impl PipelineManager {
 
     fn validate_shader_bytecode(code: &[u8]) -> Result<(), PipelineError> {
         if code.len() % 4 != 0 {
-            return Err(PipelineError::ShaderCompilationError("Shader bytecode length must be multiple of 4".to_string()));
+            return Err(PipelineError::ShaderCompilationError(
+                "Shader bytecode length must be multiple of 4".to_string(),
+            ));
         }
 
         if code.len() < 20 {
-            return Err(PipelineError::ShaderCompilationError("Shader bytecode too short".to_string()));
+            return Err(PipelineError::ShaderCompilationError(
+                "Shader bytecode too short".to_string(),
+            ));
         }
 
         let magic = u32::from_le_bytes([code[0], code[1], code[2], code[3]]);
         if magic != 0x07230203 {
-            return Err(PipelineError::ShaderCompilationError("Invalid SPIR-V magic number".to_string()));
+            return Err(PipelineError::ShaderCompilationError(
+                "Invalid SPIR-V magic number".to_string(),
+            ));
         }
 
         Ok(())
@@ -394,13 +427,12 @@ impl PipelineManager {
             return Ok(cached_module);
         }
 
-        let create_info = vk::ShaderModuleCreateInfo::builder()
-            .code(unsafe {
-                std::slice::from_raw_parts(
-                    code.as_ptr() as *const u32,
-                    code.len() / std::mem::size_of::<u32>(),
-                )
-            });
+        let create_info = vk::ShaderModuleCreateInfo::builder().code(unsafe {
+            std::slice::from_raw_parts(
+                code.as_ptr() as *const u32,
+                code.len() / std::mem::size_of::<u32>(),
+            )
+        });
 
         let module = unsafe {
             self.device
@@ -427,7 +459,11 @@ impl PipelineManager {
             .add_shader_stage(vk::ShaderStageFlags::FRAGMENT, frag_shader_module, "main")?
             .vertex_input(vertex_input_info)
             .input_assembly(vk::PrimitiveTopology::TRIANGLE_LIST, false)
-            .rasterization(vk::PolygonMode::FILL, vk::CullModeFlags::BACK, vk::FrontFace::CLOCKWISE)
+            .rasterization(
+                vk::PolygonMode::FILL,
+                vk::CullModeFlags::BACK,
+                vk::FrontFace::CLOCKWISE,
+            )
             .multisample(vk::SampleCountFlags::TYPE_1, false)
             .color_blending(true)?
             .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR])
@@ -463,7 +499,10 @@ impl PipelineManager {
             .build_compute()?;
 
         let stages = vec![vk::ShaderStageFlags::COMPUTE];
-        let hash = Self::calculate_pipeline_hash(&stages, &vk::PipelineVertexInputStateCreateInfo::default());
+        let hash = Self::calculate_pipeline_hash(
+            &stages,
+            &vk::PipelineVertexInputStateCreateInfo::default(),
+        );
 
         let pipeline_obj = Pipeline {
             pipeline,
@@ -477,14 +516,21 @@ impl PipelineManager {
         Ok(self.pipelines.get(name).unwrap())
     }
 
-    fn calculate_pipeline_hash(stages: &[vk::ShaderStageFlags], vertex_input: &vk::PipelineVertexInputStateCreateInfo) -> u64 {
+    fn calculate_pipeline_hash(
+        stages: &[vk::ShaderStageFlags],
+        vertex_input: &vk::PipelineVertexInputStateCreateInfo,
+    ) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
         let mut hasher = DefaultHasher::new();
         stages.hash(&mut hasher);
-        vertex_input.vertex_binding_description_count.hash(&mut hasher);
-        vertex_input.vertex_attribute_description_count.hash(&mut hasher);
+        vertex_input
+            .vertex_binding_description_count
+            .hash(&mut hasher);
+        vertex_input
+            .vertex_attribute_description_count
+            .hash(&mut hasher);
         hasher.finish()
     }
 
@@ -502,7 +548,8 @@ impl PipelineManager {
 
     pub fn bind_pipeline(&self, cmd: vk::CommandBuffer, pipeline: &Pipeline) {
         unsafe {
-            self.device.cmd_bind_pipeline(cmd, pipeline.bind_point, pipeline.pipeline);
+            self.device
+                .cmd_bind_pipeline(cmd, pipeline.bind_point, pipeline.pipeline);
         }
     }
 
@@ -600,7 +647,8 @@ impl Drop for PipelineManager {
                 self.device.destroy_shader_module(module, None);
             }
 
-            self.device.destroy_pipeline_layout(self.default_layout, None);
+            self.device
+                .destroy_pipeline_layout(self.default_layout, None);
         }
     }
 }

@@ -8,11 +8,11 @@
 //! - This file intentionally avoids requiring `Send` on internal futures to keep
 //!   JIT/FFI/raw-pointer heavy subsystems off of cross-thread moves.
 
-use std::{panic::AssertUnwindSafe, sync::Arc};
-use tokio::sync::RwLock;
-use thiserror::Error;
-use serde::{Serialize, Deserialize};
 use base64::Engine;
+use serde::{Deserialize, Serialize};
+use std::{panic::AssertUnwindSafe, sync::Arc};
+use thiserror::Error;
+use tokio::sync::RwLock;
 
 // For secure data: URL handling
 use percent_encoding::percent_decode_str;
@@ -22,22 +22,22 @@ use futures::FutureExt;
 
 pub mod core;
 pub mod js_engine;
+pub mod pwa;
 pub mod renderer;
 pub mod sandbox;
-pub mod pwa;
 
 use crate::core::{
+    css::StyleEngine,
     dom::Document,
     events::EventSystem,
-    network::{NetworkManager, NetworkError},
-    css::StyleEngine,
     layout::LayoutEngine,
+    network::{NetworkError, NetworkManager},
 };
-use crate::js_engine::{JSRuntime, JSError};
-use crate::renderer::{VulkanRenderer, RenderError, LayoutTree};
-use crate::sandbox::{SandboxManager, SandboxError};
+use crate::js_engine::{JSError, JSRuntime};
 use crate::pwa::PwaError;
 use crate::pwa::PwaRuntime as PwaManager;
+use crate::renderer::{LayoutTree, RenderError, VulkanRenderer};
+use crate::sandbox::{SandboxError, SandboxManager};
 
 #[derive(Error, Debug, Clone)]
 pub enum BrowserError {
@@ -66,19 +66,29 @@ pub enum BrowserError {
 }
 
 impl From<JSError> for BrowserError {
-    fn from(e: JSError) -> Self { BrowserError::JSEngine(e.to_string()) }
+    fn from(e: JSError) -> Self {
+        BrowserError::JSEngine(e.to_string())
+    }
 }
 impl From<NetworkError> for BrowserError {
-    fn from(e: NetworkError) -> Self { BrowserError::Network(e.to_string()) }
+    fn from(e: NetworkError) -> Self {
+        BrowserError::Network(e.to_string())
+    }
 }
 impl From<SandboxError> for BrowserError {
-    fn from(e: SandboxError) -> Self { BrowserError::Sandbox(e.to_string()) }
+    fn from(e: SandboxError) -> Self {
+        BrowserError::Sandbox(e.to_string())
+    }
 }
 impl From<PwaError> for BrowserError {
-    fn from(e: PwaError) -> Self { BrowserError::PWA(e.to_string()) }
+    fn from(e: PwaError) -> Self {
+        BrowserError::PWA(e.to_string())
+    }
 }
 impl From<RenderError> for BrowserError {
-    fn from(e: RenderError) -> Self { BrowserError::Render(e.to_string()) }
+    fn from(e: RenderError) -> Self {
+        BrowserError::Render(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, BrowserError>;
@@ -192,25 +202,74 @@ pub struct NetworkMetrics {
 
 #[derive(Debug, Clone)]
 pub enum InputEvent {
-    MouseMove { x: i32, y: i32 },
-    MouseClick { x: i32, y: i32, button: u8 },
-    MouseWheel { x: i32, y: i32, delta_x: f64, delta_y: f64 },
-    KeyPress { key: String, modifiers: u8 },
-    KeyRelease { key: String, modifiers: u8 },
-    Scroll { delta_x: f64, delta_y: f64 },
-    Touch { x: i32, y: i32, pressure: f64, id: u32 },
-    Resize { width: u32, height: u32 },
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseClick {
+        x: i32,
+        y: i32,
+        button: u8,
+    },
+    MouseWheel {
+        x: i32,
+        y: i32,
+        delta_x: f64,
+        delta_y: f64,
+    },
+    KeyPress {
+        key: String,
+        modifiers: u8,
+    },
+    KeyRelease {
+        key: String,
+        modifiers: u8,
+    },
+    Scroll {
+        delta_x: f64,
+        delta_y: f64,
+    },
+    Touch {
+        x: i32,
+        y: i32,
+        pressure: f64,
+        id: u32,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum BrowserEvent {
-    PageLoaded { url: String, load_time_ms: u64 },
-    NavigationStarted { url: String },
-    JavaScriptError { message: String, line: u32, column: u32 },
-    NetworkError { url: String, error: String },
-    SecurityViolation { description: String },
-    PerformanceWarning { metric: String, value: f64, threshold: f64 },
-    ErrorHandled { message: String }, // emitted by error handler
+    PageLoaded {
+        url: String,
+        load_time_ms: u64,
+    },
+    NavigationStarted {
+        url: String,
+    },
+    JavaScriptError {
+        message: String,
+        line: u32,
+        column: u32,
+    },
+    NetworkError {
+        url: String,
+        error: String,
+    },
+    SecurityViolation {
+        description: String,
+    },
+    PerformanceWarning {
+        metric: String,
+        value: f64,
+        threshold: f64,
+    },
+    ErrorHandled {
+        message: String,
+    }, // emitted by error handler
 }
 
 pub struct BrowserEngine {
@@ -276,7 +335,10 @@ impl BrowserEngine {
         } else {
             eprintln!("[BrowserEngine ERROR] {err}");
         }
-        self.emit_event(BrowserEvent::ErrorHandled { message: err.to_string() }).await;
+        self.emit_event(BrowserEvent::ErrorHandled {
+            message: err.to_string(),
+        })
+        .await;
     }
 
     /// Install a custom error handler callback (e.g. log, UI toast, telemetry).
@@ -294,16 +356,17 @@ impl BrowserEngine {
         let renderer = Arc::new(RwLock::new(
             VulkanRenderer::new()
                 .await
-                .map_err(|e| BrowserError::RendererInit(e.to_string()))?
+                .map_err(|e| BrowserError::RendererInit(e.to_string()))?,
         ));
 
         let js_runtime = Arc::new(RwLock::new(JSRuntime::new(&config).await?));
 
         let document = Arc::new(RwLock::new(Document::new()));
         let style_engine = Arc::new(StyleEngine::new());
-        let layout_engine = Arc::new(RwLock::new(
-            LayoutEngine::new(config.viewport_width, config.viewport_height)
-        ));
+        let layout_engine = Arc::new(RwLock::new(LayoutEngine::new(
+            config.viewport_width,
+            config.viewport_height,
+        )));
         let event_system = Arc::new(EventSystem::new());
         let network_manager = Arc::new(NetworkManager::new(&config).await?);
 
@@ -357,7 +420,8 @@ impl BrowserEngine {
     }
 
     pub async fn execute_javascript(&self, script: &str) -> Result<serde_json::Value> {
-        self.run_safe(self.execute_javascript_inner(script.to_string())).await
+        self.run_safe(self.execute_javascript_inner(script.to_string()))
+            .await
     }
 
     pub async fn reload(&self) -> Result<()> {
@@ -365,7 +429,8 @@ impl BrowserEngine {
     }
 
     pub async fn resize_viewport(&self, width: u32, height: u32) -> Result<()> {
-        self.run_safe(self.resize_viewport_inner(width, height)).await
+        self.run_safe(self.resize_viewport_inner(width, height))
+            .await
     }
 
     pub async fn get_performance_metrics(&self) -> PerformanceMetrics {
@@ -416,10 +481,13 @@ impl BrowserEngine {
     pub async fn handle_input_event(&self, event: InputEvent) -> Result<()> {
         self.run_safe(async move {
             match event {
-                InputEvent::Resize { width, height } => self.resize_viewport_inner(width, height).await,
+                InputEvent::Resize { width, height } => {
+                    self.resize_viewport_inner(width, height).await
+                }
                 _ => Ok(()),
             }
-        }).await
+        })
+        .await
     }
 
     pub async fn enable_chrome_api(&self, api_name: &str) -> Result<()> {
@@ -427,7 +495,9 @@ impl BrowserEngine {
         // consider redesigning JSRuntime to split mutable/async parts.
         self.run_safe(async move {
             if !self.config.enable_chrome_apis {
-                return Err(BrowserError::Platform("Chrome APIs not enabled".to_string()));
+                return Err(BrowserError::Platform(
+                    "Chrome APIs not enabled".to_string(),
+                ));
             }
             let rt = self.js_runtime.read().await;
             match api_name {
@@ -437,21 +507,29 @@ impl BrowserEngine {
                 "gamepad" => rt.inject_gamepad_api().await?,
                 "webrtc" => rt.inject_webrtc_api().await?,
                 "websocket" => rt.inject_websocket_api().await?,
-                _ => return Err(BrowserError::Platform(format!("Unknown or unimplemented API: {api_name}"))),
+                _ => {
+                    return Err(BrowserError::Platform(format!(
+                        "Unknown or unimplemented API: {api_name}"
+                    )))
+                }
             }
             Ok(())
-        }).await
+        })
+        .await
     }
 
     pub async fn set_user_agent(&self, user_agent: &str) -> Result<()> {
         self.run_safe(async move {
             if user_agent.trim().is_empty() {
-                return Err(BrowserError::Platform("user_agent must not be empty".to_string()));
+                return Err(BrowserError::Platform(
+                    "user_agent must not be empty".to_string(),
+                ));
             }
             // Persist for future requests by updating NetworkManager if it exposes setter.
             // For now, accept and no-op (avoids lying).
             Ok(())
-        }).await
+        })
+        .await
     }
 
     pub async fn clear_cache(&self) -> Result<()> {
@@ -477,25 +555,35 @@ impl BrowserEngine {
         self.run_safe(async move {
             if let Some(pwa_manager) = &self.pwa_manager {
                 let manifest_content = self.network_manager.fetch(manifest_url).await?;
-                let manifest: crate::pwa::manifest::Manifest = serde_json::from_str(&manifest_content)
-                    .map_err(|e| BrowserError::Platform(format!("Failed to parse manifest: {e}")))?;
+                let manifest: crate::pwa::manifest::Manifest =
+                    serde_json::from_str(&manifest_content).map_err(|e| {
+                        BrowserError::Platform(format!("Failed to parse manifest: {e}"))
+                    })?;
                 let _ = pwa_manager.install_app(&manifest).await?;
                 Ok(())
             } else {
-                Err(BrowserError::Platform("PWA functionality not enabled".to_string()))
+                Err(BrowserError::Platform(
+                    "PWA functionality not enabled".to_string(),
+                ))
             }
-        }).await
+        })
+        .await
     }
 
     pub async fn register_service_worker(&self, script_url: &str) -> Result<()> {
         self.run_safe(async move {
             if let Some(pwa_manager) = &self.pwa_manager {
-                let _ = pwa_manager.register_service_worker(script_url, None).await?;
+                let _ = pwa_manager
+                    .register_service_worker(script_url, None)
+                    .await?;
                 Ok(())
             } else {
-                Err(BrowserError::Platform("PWA functionality not enabled".to_string()))
+                Err(BrowserError::Platform(
+                    "PWA functionality not enabled".to_string(),
+                ))
             }
-        }).await
+        })
+        .await
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -529,17 +617,21 @@ impl BrowserEngine {
             crate::js_engine::v8_binding::V8Runtime::dispose_v8();
 
             Ok(())
-        }).await
+        })
+        .await
     }
 
     // -------- Internal implementations (unsafeguarded; always call via run_safe) --------
 
     async fn load_url_inner(&self, url: String) -> Result<()> {
         if *self.is_shutdown.read().await {
-            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
+            return Err(BrowserError::Platform(
+                "Browser engine has been shut down".to_string(),
+            ));
         }
 
-        self.emit_event(BrowserEvent::NavigationStarted { url: url.clone() }).await;
+        self.emit_event(BrowserEvent::NavigationStarted { url: url.clone() })
+            .await;
         *self.is_loading_flag.write().await = true;
 
         let start_time = std::time::Instant::now();
@@ -554,14 +646,24 @@ impl BrowserEngine {
             if bytes.len() > self.config.max_data_url_bytes {
                 return Err(BrowserError::Security("data: payload too large".into()));
             }
-            let allowed = self.config.allowed_data_mime_prefixes.iter().any(|p| mime.starts_with(p));
+            let allowed = self
+                .config
+                .allowed_data_mime_prefixes
+                .iter()
+                .any(|p| mime.starts_with(p));
             if !allowed {
                 return Err(BrowserError::Security(format!("Blocked data: MIME {mime}")));
             }
-            if mime.starts_with("text/html") || mime.starts_with("text/plain") || mime == "application/xhtml+xml" {
-                String::from_utf8(bytes).unwrap_or_else(|_| "<!doctype html><title>Invalid UTF-8</title>".to_string())
+            if mime.starts_with("text/html")
+                || mime.starts_with("text/plain")
+                || mime == "application/xhtml+xml"
+            {
+                String::from_utf8(bytes)
+                    .unwrap_or_else(|_| "<!doctype html><title>Invalid UTF-8</title>".to_string())
             } else {
-                return Err(BrowserError::Security(format!("Top-level data: MIME not renderable: {mime}")));
+                return Err(BrowserError::Security(format!(
+                    "Top-level data: MIME not renderable: {mime}"
+                )));
             }
         } else {
             // Normal fetch path
@@ -571,7 +673,8 @@ impl BrowserEngine {
         // Parse HTML and update document
         {
             let document = self.document.write().await;
-            document.parse_html(&content)
+            document
+                .parse_html(&content)
                 .map_err(|e| BrowserError::Document(e.to_string()))?;
             document.set_url(url.clone());
         }
@@ -603,13 +706,15 @@ impl BrowserEngine {
             let document_guard = self.document.read().await;
 
             // Compute styles (sync)
-            self.style_engine.compute_styles(&document_guard)
+            self.style_engine
+                .compute_styles(&document_guard)
                 .map_err(|e| BrowserError::Style(e.to_string()))?;
 
             // Compute layout (async)
             {
                 let layout_engine = self.layout_engine.write().await;
-                layout_engine.compute_layout(&document_guard, &self.style_engine)
+                layout_engine
+                    .compute_layout(&document_guard, &self.style_engine)
                     .await
                     .map_err(|e| BrowserError::Layout(e.to_string()))?;
             }
@@ -620,8 +725,11 @@ impl BrowserEngine {
                 rt.inject_document_api(&document_guard).await?;
                 if let Err(e) = rt.execute_inline_scripts(&document_guard).await {
                     self.emit_event(BrowserEvent::JavaScriptError {
-                        message: e.to_string(), line: 0, column: 0,
-                    }).await;
+                        message: e.to_string(),
+                        line: 0,
+                        column: 0,
+                    })
+                    .await;
                 }
             }
 
@@ -636,7 +744,11 @@ impl BrowserEngine {
         *self.is_loading_flag.write().await = false;
 
         let load_time = start_time.elapsed().as_millis() as u64;
-        self.emit_event(BrowserEvent::PageLoaded { url, load_time_ms: load_time }).await;
+        self.emit_event(BrowserEvent::PageLoaded {
+            url,
+            load_time_ms: load_time,
+        })
+        .await;
 
         Ok(())
     }
@@ -677,7 +789,9 @@ impl BrowserEngine {
 
     async fn execute_javascript_inner(&self, script: String) -> Result<serde_json::Value> {
         if *self.is_shutdown.read().await {
-            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
+            return Err(BrowserError::Platform(
+                "Browser engine has been shut down".to_string(),
+            ));
         }
         // Use read lock; assume JSRuntime::execute takes &self
         let rt = self.js_runtime.read().await;
@@ -698,12 +812,15 @@ impl BrowserEngine {
 
     async fn resize_viewport_inner(&self, width: u32, height: u32) -> Result<()> {
         if *self.is_shutdown.read().await {
-            return Err(BrowserError::Platform("Browser engine has been shut down".to_string()));
+            return Err(BrowserError::Platform(
+                "Browser engine has been shut down".to_string(),
+            ));
         }
 
         {
             let layout_engine = self.layout_engine.write().await;
-            layout_engine.resize_viewport(width, height)
+            layout_engine
+                .resize_viewport(width, height)
                 .await
                 .map_err(|e| BrowserError::Layout(e.to_string()))?;
         }
@@ -712,7 +829,8 @@ impl BrowserEngine {
             let document_guard = self.document.read().await;
             {
                 let layout_engine = self.layout_engine.write().await;
-                layout_engine.compute_layout(&document_guard, &self.style_engine)
+                layout_engine
+                    .compute_layout(&document_guard, &self.style_engine)
                     .await
                     .map_err(|e| BrowserError::Layout(e.to_string()))?;
             }
@@ -755,7 +873,9 @@ impl Drop for BrowserEngine {
 /// Parse the part after "data:" in a data URL. Returns (mime, bytes).
 fn parse_data_url(rest: &str) -> std::result::Result<(String, Vec<u8>), String> {
     // RFC 2397: data:[<mediatype>][;base64],<data>
-    let idx = rest.find(',').ok_or_else(|| "Malformed data URL (missing comma)".to_string())?;
+    let idx = rest
+        .find(',')
+        .ok_or_else(|| "Malformed data URL (missing comma)".to_string())?;
     let (meta, payload) = rest.split_at(idx);
     let payload = &payload[1..]; // skip comma
 
@@ -774,12 +894,12 @@ fn parse_data_url(rest: &str) -> std::result::Result<(String, Vec<u8>), String> 
     }
 
     let bytes = if base64_flag {
-            base64::engine::general_purpose::STANDARD
-                .decode(payload)
-                .map_err(|_| "Invalid base64 payload".to_string())?
-        } else {
-            percent_decode_str(payload).collect::<Vec<u8>>()
-        };
+        base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .map_err(|_| "Invalid base64 payload".to_string())?
+    } else {
+        percent_decode_str(payload).collect::<Vec<u8>>()
+    };
 
     Ok((mime, bytes))
 }

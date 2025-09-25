@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use std::collections::HashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 
-use crate::core::dom::node::{Node, NodeType};
-use crate::core::dom::document::NodeId;
 use crate::core::css::CSSStyleDeclaration;
+use crate::core::dom::document::NodeId;
+use crate::core::dom::node::{Node, NodeType};
 
 #[derive(Error, Debug)]
 pub enum ElementError {
@@ -124,8 +124,7 @@ impl Default for ElementProperties {
     }
 }
 
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ElementInternals {
     pub form_associated: bool,
     pub form_disabled: bool,
@@ -137,7 +136,6 @@ pub struct ElementInternals {
     pub labels: Vec<NodeId>,
     pub form: Option<NodeId>,
 }
-
 
 impl std::fmt::Debug for ElementInternals {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -256,7 +254,9 @@ impl Element {
 
     pub fn from_node(node: Node) -> Result<Self> {
         if node.get_node_type() != NodeType::Element {
-            return Err(ElementError::InvalidOperation("Node is not an element".to_string()));
+            return Err(ElementError::InvalidOperation(
+                "Node is not an element".to_string(),
+            ));
         }
         let classes = node.get_classes();
         Ok(Self {
@@ -338,7 +338,8 @@ impl Element {
 
     pub fn set_style_property(&self, property: &str, value: &str) -> Result<()> {
         let style = self.style.write();
-        style.set_property(property, value, "")
+        style
+            .set_property(property, value, "")
             .map_err(|e| ElementError::InvalidPropertyValue(e.to_string()))?;
         Ok(())
     }
@@ -528,7 +529,8 @@ impl Element {
 
     pub fn set_spellcheck(&mut self, spellcheck: bool) {
         self.properties.write().spellcheck = spellcheck;
-        self.node.set_attribute("spellcheck", &spellcheck.to_string());
+        self.node
+            .set_attribute("spellcheck", &spellcheck.to_string());
     }
 
     pub fn get_title(&self) -> String {
@@ -572,7 +574,9 @@ impl Element {
     }
 
     pub fn set_dataset_value(&mut self, key: &str, value: &str) {
-        self.dataset.write().insert(key.to_string(), value.to_string());
+        self.dataset
+            .write()
+            .insert(key.to_string(), value.to_string());
         let attr_name = format!("data-{}", key.replace('_', "-"));
         self.node.set_attribute(&attr_name, value);
     }
@@ -590,22 +594,32 @@ impl Element {
 
     pub fn insert_adjacent_html(&mut self, position: &str, _html: &str) -> Result<()> {
         match position {
-            "beforebegin" => {},
-            "afterbegin" => {},
-            "beforeend" => {},
-            "afterend" => {},
-            _ => return Err(ElementError::InvalidOperation(format!("Invalid position: {}", position))),
+            "beforebegin" => {}
+            "afterbegin" => {}
+            "beforeend" => {}
+            "afterend" => {}
+            _ => {
+                return Err(ElementError::InvalidOperation(format!(
+                    "Invalid position: {}",
+                    position
+                )))
+            }
         }
         Ok(())
     }
 
     pub fn insert_adjacent_text(&mut self, position: &str, _text: &str) -> Result<()> {
         match position {
-            "beforebegin" => {},
-            "afterbegin" => {},
-            "beforeend" => {},
-            "afterend" => {},
-            _ => return Err(ElementError::InvalidOperation(format!("Invalid position: {}", position))),
+            "beforebegin" => {}
+            "afterbegin" => {}
+            "beforeend" => {}
+            "afterend" => {}
+            _ => {
+                return Err(ElementError::InvalidOperation(format!(
+                    "Invalid position: {}",
+                    position
+                )))
+            }
         }
         Ok(())
     }
@@ -618,7 +632,11 @@ impl Element {
         Ok(None)
     }
 
-    pub fn animate(&self, _keyframes: Vec<HashMap<String, String>>, options: AnimationOptions) -> AnimationId {
+    pub fn animate(
+        &self,
+        _keyframes: Vec<HashMap<String, String>>,
+        options: AnimationOptions,
+    ) -> AnimationId {
         let mut animations = self.animation_properties.write();
         let animation = Animation {
             name: format!("animation_{}", fastrand::u64(..)),

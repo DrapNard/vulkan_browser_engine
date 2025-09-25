@@ -3,15 +3,15 @@ pub mod manifest;
 pub mod service_worker;
 pub mod storage;
 
-use cache::{CacheManager, CacheError};
-use manifest::{Manifest, ManifestParser, ManifestError};
-use service_worker::{ServiceWorkerManager, ServiceWorkerError};
-use storage::{StorageManager, StorageError};
+use cache::{CacheError, CacheManager};
+use manifest::{Manifest, ManifestError, ManifestParser};
+use service_worker::{ServiceWorkerError, ServiceWorkerManager};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::{RwLock, Mutex};
-use tracing::{info, warn, error};
+use storage::{StorageError, StorageManager};
+use tokio::sync::{Mutex, RwLock};
+use tracing::{error, info, warn};
 
 pub struct PwaRuntime {
     cache_manager: Arc<Mutex<CacheManager>>,
@@ -76,7 +76,7 @@ impl PwaRuntime {
     /// Gracefully shutdown the PWA runtime, cleaning up all resources
     pub async fn shutdown(&self) -> Result<(), PwaError> {
         info!("Shutting down PWA Runtime...");
-        
+
         // Mark as shutdown to prevent new operations
         {
             let mut shutdown_flag = self.is_shutdown.write().await;
@@ -90,7 +90,7 @@ impl PwaRuntime {
         {
             let sw_manager = self.service_worker_manager.lock().await;
             let workers = sw_manager.list_active_workers().await;
-            
+
             for worker_id in workers {
                 if let Err(e) = sw_manager.unregister(&worker_id).await {
                     warn!("Error shutting down service worker {}: {}", worker_id, e);
@@ -105,7 +105,7 @@ impl PwaRuntime {
             info!("Cache manager will be cleaned up when dropped");
         }
 
-        // Clear storage - using existing clear methods if available  
+        // Clear storage - using existing clear methods if available
         {
             // Note: We're not calling specific shutdown methods since they don't exist yet
             // Instead, we'll just clear the managers' references which will drop resources
@@ -137,9 +137,9 @@ impl PwaRuntime {
 
     pub async fn install_app(&self, manifest: &Manifest) -> Result<String, PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let app_id = self.generate_app_id(manifest);
-        
+
         let installed_app = InstalledApp {
             id: app_id.clone(),
             manifest: manifest.clone(),
@@ -152,14 +152,17 @@ impl PwaRuntime {
 
         if let Some(service_worker_url) = &manifest.service_worker {
             let scope = manifest.scope.clone().unwrap_or_else(|| "/".to_string());
-            
+
             let sw_manager = self.service_worker_manager.lock().await;
             match sw_manager.register(service_worker_url, &scope).await {
                 Ok(worker_id) => {
                     info!("Registered service worker {} for app {}", worker_id, app_id);
                 }
                 Err(e) => {
-                    warn!("Failed to register service worker for app {}: {}", app_id, e);
+                    warn!(
+                        "Failed to register service worker for app {}: {}",
+                        app_id, e
+                    );
                     drop(sw_manager);
                     self.unregister_app(&app_id).await;
                     return Err(PwaError::ServiceWorkerError(e));
@@ -173,9 +176,9 @@ impl PwaRuntime {
 
     pub async fn uninstall_app(&self, app_id: &str) -> Result<(), PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let app_exists = self.remove_app(app_id).await;
-        
+
         if !app_exists {
             return Err(PwaError::AppNotFound(app_id.to_string()));
         }
@@ -195,13 +198,16 @@ impl PwaRuntime {
         if let Err(e) = cache_result {
             warn!("Failed to clear cache for app {}: {}", app_id, e);
         }
-        
+
         if let Err(e) = storage_result {
             warn!("Failed to clear storage for app {}: {}", app_id, e);
         }
 
         if let Err(e) = sw_result {
-            warn!("Failed to cleanup service workers for app {}: {}", app_id, e);
+            warn!(
+                "Failed to cleanup service workers for app {}: {}",
+                app_id, e
+            );
         }
 
         info!("Successfully uninstalled PWA: {}", app_id);
@@ -212,23 +218,26 @@ impl PwaRuntime {
         if self.is_shutdown().await {
             return Vec::new();
         }
-        
+
         let apps = self.installed_apps.read().await;
         apps.values().cloned().collect()
     }
 
     pub async fn update_app(&self, app_id: &str, new_manifest: &Manifest) -> Result<(), PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let updated = self.update_app_manifest(app_id, new_manifest).await;
-        
+
         if !updated {
             return Err(PwaError::AppNotFound(app_id.to_string()));
         }
 
         if let Some(service_worker_url) = &new_manifest.service_worker {
-            let scope = new_manifest.scope.clone().unwrap_or_else(|| "/".to_string());
-            
+            let scope = new_manifest
+                .scope
+                .clone()
+                .unwrap_or_else(|| "/".to_string());
+
             let sw_manager = self.service_worker_manager.lock().await;
             if let Some(worker) = sw_manager.get_registration(&scope).await {
                 match sw_manager.update_worker(&worker.id).await {
@@ -237,8 +246,14 @@ impl PwaRuntime {
                 }
             } else {
                 match sw_manager.register(service_worker_url, &scope).await {
-                    Ok(worker_id) => info!("Registered new service worker {} for app {}", worker_id, app_id),
-                    Err(e) => warn!("Failed to register new service worker for app {}: {}", app_id, e),
+                    Ok(worker_id) => info!(
+                        "Registered new service worker {} for app {}",
+                        worker_id, app_id
+                    ),
+                    Err(e) => warn!(
+                        "Failed to register new service worker for app {}: {}",
+                        app_id, e
+                    ),
                 }
             }
         }
@@ -247,11 +262,15 @@ impl PwaRuntime {
         Ok(())
     }
 
-    pub async fn register_service_worker(&self, script_url: &str, scope: Option<&str>) -> Result<String, PwaError> {
+    pub async fn register_service_worker(
+        &self,
+        script_url: &str,
+        scope: Option<&str>,
+    ) -> Result<String, PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let actual_scope = scope.unwrap_or("/");
-        
+
         let sw_manager = self.service_worker_manager.lock().await;
         match sw_manager.register(script_url, actual_scope).await {
             Ok(worker_id) => {
@@ -265,9 +284,12 @@ impl PwaRuntime {
         }
     }
 
-    pub async fn handle_fetch_request(&self, request: &FetchRequest) -> Result<FetchResponse, PwaError> {
+    pub async fn handle_fetch_request(
+        &self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let sw_response = {
             let sw_manager = self.service_worker_manager.lock().await;
             sw_manager.handle_fetch(request).await?
@@ -291,9 +313,9 @@ impl PwaRuntime {
 
     pub async fn get_app_storage_usage(&self, app_id: &str) -> Result<StorageUsage, PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let app_exists = self.app_exists(app_id).await;
-        
+
         if !app_exists {
             return Err(PwaError::AppNotFound(app_id.to_string()));
         }
@@ -314,15 +336,17 @@ impl PwaRuntime {
             cache_size,
             indexeddb_size: storage_details.indexeddb_size,
             local_storage_size: storage_details.local_storage_size,
-            total_size: cache_size + storage_details.indexeddb_size + storage_details.local_storage_size,
+            total_size: cache_size
+                + storage_details.indexeddb_size
+                + storage_details.local_storage_size,
         })
     }
 
     pub async fn clear_app_data(&self, app_id: &str) -> Result<(), PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let app_exists = self.app_exists(app_id).await;
-        
+
         if !app_exists {
             return Err(PwaError::AppNotFound(app_id.to_string()));
         }
@@ -350,7 +374,7 @@ impl PwaRuntime {
         if self.is_shutdown().await {
             return None;
         }
-        
+
         let apps = self.installed_apps.read().await;
         apps.get(app_id).map(|app| app.manifest.clone())
     }
@@ -359,14 +383,14 @@ impl PwaRuntime {
         if self.is_shutdown().await {
             return Vec::new();
         }
-        
+
         let sw_manager = self.service_worker_manager.lock().await;
         sw_manager.list_active_workers().await
     }
 
     pub async fn cleanup_inactive_apps(&self) -> Result<Vec<String>, PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let inactive_threshold = SystemTime::now()
             .checked_sub(std::time::Duration::from_secs(30 * 24 * 60 * 60))
             .unwrap_or(SystemTime::UNIX_EPOCH);
@@ -391,7 +415,7 @@ impl PwaRuntime {
 
     pub async fn get_total_storage_usage(&self) -> Result<StorageUsage, PwaError> {
         self.check_not_shutdown().await?;
-        
+
         let cache_usage = {
             let cache_manager = self.cache_manager.lock().await;
             cache_manager.get_cache_usage().await
@@ -471,7 +495,7 @@ impl PwaRuntime {
     async fn cleanup_app_service_workers(&self, app_id: &str) -> Result<(), PwaError> {
         let sw_manager = self.service_worker_manager.lock().await;
         let workers = sw_manager.get_all_registrations().await;
-        
+
         for worker in workers {
             if worker.scope.contains(app_id) {
                 if let Err(e) = sw_manager.unregister(&worker.id).await {
@@ -479,12 +503,15 @@ impl PwaRuntime {
                 }
             }
         }
-        
+
         Ok(())
     }
 
-    async fn handle_network_fetch(&self, request: &FetchRequest) -> Result<FetchResponse, PwaError> {
-        // For now, return a simple error. In a real implementation, 
+    async fn handle_network_fetch(
+        &self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, PwaError> {
+        // For now, return a simple error. In a real implementation,
         // this would make an actual network request
         Err(PwaError::ResourceNotFound(request.url.clone()))
     }
@@ -492,7 +519,7 @@ impl PwaRuntime {
     fn generate_app_id(&self, manifest: &Manifest) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         manifest.start_url.hash(&mut hasher);
         manifest.name.hash(&mut hasher);
@@ -501,7 +528,7 @@ impl PwaRuntime {
             .unwrap_or_default()
             .as_nanos()
             .hash(&mut hasher);
-        
+
         format!("app_{:x}", hasher.finish())
     }
 }
@@ -532,7 +559,6 @@ pub enum PwaError {
 
 impl Default for PwaRuntime {
     fn default() -> Self {
-        futures::executor::block_on(Self::new())
-            .expect("Failed to create default PwaRuntime")
+        futures::executor::block_on(Self::new()).expect("Failed to create default PwaRuntime")
     }
 }

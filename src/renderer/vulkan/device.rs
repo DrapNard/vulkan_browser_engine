@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use std::collections::HashSet;
-use std::ffi::CStr;
-use ash::{Device, Instance, Entry};
-use ash::vk;
 use ash::extensions::khr::Surface;
+use ash::vk;
+use ash::{Device, Entry, Instance};
 use parking_lot::RwLock;
 use smallvec::SmallVec;
+use std::collections::HashSet;
+use std::ffi::CStr;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -66,32 +66,27 @@ pub struct VulkanDevice {
 
 impl VulkanDevice {
     pub async fn new(
-        entry: &Entry, 
-        instance: &Instance, 
-        surface: vk::SurfaceKHR, 
-        surface_loader: &Surface
+        entry: &Entry,
+        instance: &Instance,
+        surface: vk::SurfaceKHR,
+        surface_loader: &Surface,
     ) -> Result<Self> {
-        let physical_device = Self::select_physical_device(entry, instance, surface, surface_loader)?;
-        
-        let queue_families = Self::find_queue_families(instance, physical_device, surface, surface_loader)?;
-        
+        let physical_device =
+            Self::select_physical_device(entry, instance, surface, surface_loader)?;
+
+        let queue_families =
+            Self::find_queue_families(instance, physical_device, surface, surface_loader)?;
+
         let capabilities = Self::query_device_capabilities(instance, physical_device)?;
-        
-        let (logical_device, queues) = Self::create_logical_device(
-            instance, 
-            physical_device, 
-            queue_families, 
-            &capabilities
-        )?;
-        
-        let memory_properties = unsafe {
-            instance.get_physical_device_memory_properties(physical_device)
-        };
-        
-        let device_properties = unsafe {
-            instance.get_physical_device_properties(physical_device)
-        };
-        
+
+        let (logical_device, queues) =
+            Self::create_logical_device(instance, physical_device, queue_families, &capabilities)?;
+
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
+        let device_properties = unsafe { instance.get_physical_device_properties(physical_device) };
+
         Ok(Self {
             physical_device,
             logical_device,
@@ -116,7 +111,7 @@ impl VulkanDevice {
     ) -> Result<bool> {
         let _queue_families = Self::find_queue_families(instance, device, surface, surface_loader)?;
         let _features = unsafe { instance.get_physical_device_features(device) };
-        
+
         Ok(true)
     }
 
@@ -124,10 +119,11 @@ impl VulkanDevice {
         entry: &Entry,
         instance: &Instance,
         surface: vk::SurfaceKHR,
-        surface_loader: &Surface
+        surface_loader: &Surface,
     ) -> Result<vk::PhysicalDevice> {
         let physical_devices = unsafe {
-            instance.enumerate_physical_devices()
+            instance
+                .enumerate_physical_devices()
                 .map_err(|e| DeviceError::DeviceCreation(e.to_string()))?
         };
 
@@ -139,7 +135,8 @@ impl VulkanDevice {
         let mut best_score = 0u32;
 
         for device in physical_devices {
-            let score = Self::rate_device_suitability(entry, instance, device, surface, surface_loader)?;
+            let score =
+                Self::rate_device_suitability(entry, instance, device, surface, surface_loader)?;
             if score > best_score {
                 best_score = score;
                 best_device = Some(device);
@@ -154,45 +151,45 @@ impl VulkanDevice {
         instance: &Instance,
         device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
-        surface_loader: &Surface
+        surface_loader: &Surface,
     ) -> Result<u32> {
         let properties = unsafe { instance.get_physical_device_properties(device) };
         let features = unsafe { instance.get_physical_device_features(device) };
-        
+
         let mut score = 0u32;
-        
+
         match properties.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => score += 1000,
             vk::PhysicalDeviceType::INTEGRATED_GPU => score += 500,
             _ => score += 100,
         }
-        
+
         score += properties.limits.max_image_dimension2_d;
-        
+
         if features.geometry_shader == vk::TRUE {
             score += 100;
         }
-        
+
         if features.tessellation_shader == vk::TRUE {
             score += 100;
         }
-        
+
         if features.multi_viewport == vk::TRUE {
             score += 50;
         }
-        
+
         let _queue_families = Self::find_queue_families(instance, device, surface, surface_loader)?;
-        
+
         let extensions = Self::get_required_extensions();
         let supported_extensions = Self::get_supported_extensions(instance, device)?;
-        
+
         for ext in &extensions {
             let ext_str = ext.to_str().unwrap();
             if !supported_extensions.contains(ext_str) {
                 return Ok(0);
             }
         }
-        
+
         Ok(score)
     }
 
@@ -200,11 +197,10 @@ impl VulkanDevice {
         instance: &Instance,
         device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
-        surface_loader: &Surface
+        surface_loader: &Surface,
     ) -> Result<QueueFamilyIndices> {
-        let queue_families = unsafe {
-            instance.get_physical_device_queue_family_properties(device)
-        };
+        let queue_families =
+            unsafe { instance.get_physical_device_queue_family_properties(device) };
 
         let mut graphics_family = None;
         let mut compute_family = None;
@@ -215,24 +211,22 @@ impl VulkanDevice {
             if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) && graphics_family.is_none() {
                 graphics_family = Some(index as u32);
             }
-            
+
             if family.queue_flags.contains(vk::QueueFlags::COMPUTE) && compute_family.is_none() {
                 compute_family = Some(index as u32);
             }
-            
+
             if family.queue_flags.contains(vk::QueueFlags::TRANSFER) && transfer_family.is_none() {
                 transfer_family = Some(index as u32);
             }
-            
+
             if surface != vk::SurfaceKHR::null() {
                 let supports_present = unsafe {
-                    surface_loader.get_physical_device_surface_support(
-                        device, 
-                        index as u32, 
-                        surface
-                    ).unwrap_or(false)
+                    surface_loader
+                        .get_physical_device_surface_support(device, index as u32, surface)
+                        .unwrap_or(false)
                 };
-                
+
                 if supports_present && present_family.is_none() {
                     present_family = Some(index as u32);
                 }
@@ -240,34 +234,37 @@ impl VulkanDevice {
         }
 
         Ok(QueueFamilyIndices {
-            graphics: graphics_family.ok_or(DeviceError::QueueFamilyNotFound("graphics".to_string()))?,
-            compute: compute_family.ok_or(DeviceError::QueueFamilyNotFound("compute".to_string()))?,
-            transfer: transfer_family.ok_or(DeviceError::QueueFamilyNotFound("transfer".to_string()))?,
+            graphics: graphics_family
+                .ok_or(DeviceError::QueueFamilyNotFound("graphics".to_string()))?,
+            compute: compute_family
+                .ok_or(DeviceError::QueueFamilyNotFound("compute".to_string()))?,
+            transfer: transfer_family
+                .ok_or(DeviceError::QueueFamilyNotFound("transfer".to_string()))?,
             present: present_family,
         })
     }
 
     fn query_device_capabilities(
         instance: &Instance,
-        device: vk::PhysicalDevice
+        device: vk::PhysicalDevice,
     ) -> Result<DeviceCapabilities> {
         let properties = unsafe { instance.get_physical_device_properties(device) };
         let _features = unsafe { instance.get_physical_device_features(device) };
-        
+
         let mut features11 = vk::PhysicalDeviceVulkan11Features::default();
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
-        
+
         let mut features2 = vk::PhysicalDeviceFeatures2::builder()
             .push_next(&mut features11)
             .push_next(&mut features12)
             .push_next(&mut features13)
             .build();
-        
+
         unsafe {
             instance.get_physical_device_features2(device, &mut features2);
         }
-        
+
         Ok(DeviceCapabilities {
             max_memory_allocation_count: properties.limits.max_memory_allocation_count,
             max_bound_descriptor_sets: properties.limits.max_bound_descriptor_sets,
@@ -278,7 +275,9 @@ impl VulkanDevice {
             max_vertex_input_bindings: properties.limits.max_vertex_input_bindings,
             max_fragment_output_attachments: properties.limits.max_fragment_output_attachments,
             max_compute_work_group_size: properties.limits.max_compute_work_group_size,
-            max_compute_work_group_invocations: properties.limits.max_compute_work_group_invocations,
+            max_compute_work_group_invocations: properties
+                .limits
+                .max_compute_work_group_invocations,
             supports_ray_tracing: false,
             supports_mesh_shaders: false,
             supports_variable_rate_shading: false,
@@ -290,27 +289,27 @@ impl VulkanDevice {
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
         queue_families: QueueFamilyIndices,
-        capabilities: &DeviceCapabilities
+        capabilities: &DeviceCapabilities,
     ) -> Result<(Device, (vk::Queue, vk::Queue, vk::Queue, Option<vk::Queue>))> {
         let queue_priorities = [1.0];
-        
+
         let mut queue_create_infos = SmallVec::<[vk::DeviceQueueCreateInfo; 4]>::new();
         let mut unique_queue_families = HashSet::new();
-        
+
         unique_queue_families.insert(queue_families.graphics);
         unique_queue_families.insert(queue_families.compute);
         unique_queue_families.insert(queue_families.transfer);
-        
+
         if let Some(present) = queue_families.present {
             unique_queue_families.insert(present);
         }
-        
+
         for &queue_family in &unique_queue_families {
             queue_create_infos.push(
                 vk::DeviceQueueCreateInfo::builder()
                     .queue_family_index(queue_family)
                     .queue_priorities(&queue_priorities)
-                    .build()
+                    .build(),
             );
         }
 
@@ -412,9 +411,7 @@ impl VulkanDevice {
             .maintenance4(true);
 
         let extensions = Self::get_required_extensions();
-        let extension_names: Vec<*const i8> = extensions.iter()
-            .map(|ext| ext.as_ptr())
-            .collect();
+        let extension_names: Vec<*const i8> = extensions.iter().map(|ext| ext.as_ptr()).collect();
 
         let device_create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
@@ -425,18 +422,22 @@ impl VulkanDevice {
             .push_next(&mut features13);
 
         let device = unsafe {
-            instance.create_device(physical_device, &device_create_info, None)
+            instance
+                .create_device(physical_device, &device_create_info, None)
                 .map_err(|e| DeviceError::DeviceCreation(e.to_string()))?
         };
 
         let graphics_queue = unsafe { device.get_device_queue(queue_families.graphics, 0) };
         let compute_queue = unsafe { device.get_device_queue(queue_families.compute, 0) };
         let transfer_queue = unsafe { device.get_device_queue(queue_families.transfer, 0) };
-        let present_queue = queue_families.present.map(|index| unsafe { 
-            device.get_device_queue(index, 0) 
-        });
+        let present_queue = queue_families
+            .present
+            .map(|index| unsafe { device.get_device_queue(index, 0) });
 
-        Ok((device, (graphics_queue, compute_queue, transfer_queue, present_queue)))
+        Ok((
+            device,
+            (graphics_queue, compute_queue, transfer_queue, present_queue),
+        ))
     }
 
     fn get_required_extensions() -> Vec<&'static CStr> {
@@ -455,14 +456,16 @@ impl VulkanDevice {
 
     fn get_supported_extensions(
         instance: &Instance,
-        device: vk::PhysicalDevice
+        device: vk::PhysicalDevice,
     ) -> Result<HashSet<String>> {
         let extensions = unsafe {
-            instance.enumerate_device_extension_properties(device)
+            instance
+                .enumerate_device_extension_properties(device)
                 .map_err(|e| DeviceError::ExtensionNotSupported(e.to_string()))?
         };
 
-        Ok(extensions.iter()
+        Ok(extensions
+            .iter()
             .map(|ext| {
                 unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) }
                     .to_string_lossy()
@@ -512,25 +515,36 @@ impl VulkanDevice {
     }
 
     pub fn find_memory_type(
-        &self, 
-        type_filter: u32, 
-        properties: vk::MemoryPropertyFlags
+        &self,
+        type_filter: u32,
+        properties: vk::MemoryPropertyFlags,
     ) -> Option<u32> {
-        (0..self.memory_properties.memory_type_count).find(|&i| (type_filter & (1 << i)) != 0 
-                && self.memory_properties.memory_types[i as usize].property_flags.contains(properties))
+        (0..self.memory_properties.memory_type_count).find(|&i| {
+            (type_filter & (1 << i)) != 0
+                && self.memory_properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(properties)
+        })
     }
 
     pub async fn wait_idle(&self) -> Result<()> {
         unsafe {
-            self.logical_device.device_wait_idle()
+            self.logical_device
+                .device_wait_idle()
                 .map_err(|e| DeviceError::DeviceCreation(e.to_string()))?;
         }
         Ok(())
     }
 
-    pub async fn wait_for_fences(&self, fences: &[vk::Fence], wait_all: bool, timeout: u64) -> Result<()> {
+    pub async fn wait_for_fences(
+        &self,
+        fences: &[vk::Fence],
+        wait_all: bool,
+        timeout: u64,
+    ) -> Result<()> {
         unsafe {
-            self.logical_device.wait_for_fences(fences, wait_all, timeout)
+            self.logical_device
+                .wait_for_fences(fences, wait_all, timeout)
                 .map_err(|e| DeviceError::DeviceCreation(e.to_string()))?;
         }
         Ok(())
@@ -538,21 +552,18 @@ impl VulkanDevice {
 
     pub fn reset_fences(&self, fences: &[vk::Fence]) -> Result<()> {
         unsafe {
-            self.logical_device.reset_fences(fences)
+            self.logical_device
+                .reset_fences(fences)
                 .map_err(|e| DeviceError::DeviceCreation(e.to_string()))?;
         }
         Ok(())
     }
 
     pub fn get_buffer_memory_requirements(&self, buffer: vk::Buffer) -> vk::MemoryRequirements {
-        unsafe {
-            self.logical_device.get_buffer_memory_requirements(buffer)
-        }
+        unsafe { self.logical_device.get_buffer_memory_requirements(buffer) }
     }
 
     pub fn get_image_memory_requirements(&self, image: vk::Image) -> vk::MemoryRequirements {
-        unsafe {
-            self.logical_device.get_image_memory_requirements(image)
-        }
+        unsafe { self.logical_device.get_image_memory_requirements(image) }
     }
 }

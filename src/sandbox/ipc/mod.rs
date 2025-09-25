@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Semaphore};
-use uuid::Uuid;
 use tracing::log;
+use uuid::Uuid;
 
 pub struct IpcManager {
     channels: Arc<RwLock<HashMap<ChannelId, IpcChannel>>>,
@@ -82,11 +82,12 @@ struct RateLimiter {
 
 impl IpcManager {
     pub fn new() -> Self {
-        let (dead_letter_sender, mut dead_letter_receiver) = mpsc::unbounded_channel::<IpcMessage>();
-        
+        let (dead_letter_sender, mut dead_letter_receiver) =
+            mpsc::unbounded_channel::<IpcMessage>();
+
         let shutdown_signal = Arc::new(tokio::sync::Notify::new());
         let shutdown_clone = Arc::clone(&shutdown_signal);
-        
+
         tokio::spawn(async move {
             tokio::select! {
                 _ = shutdown_clone.notified() => {
@@ -95,7 +96,7 @@ impl IpcManager {
                 _ = async {
                     while let Some(message) = dead_letter_receiver.recv().await {
                         log::error!(
-                            "Dead letter: Message {} from process {} to process {} could not be delivered", 
+                            "Dead letter: Message {} from process {} to process {} could not be delivered",
                             message.id, message.sender, message.recipient
                         );
                     }
@@ -111,21 +112,34 @@ impl IpcManager {
         }
     }
 
-    pub async fn create_channel(&self, process_a: u32, process_b: u32) -> Result<ChannelId, IpcError> {
+    pub async fn create_channel(
+        &self,
+        process_a: u32,
+        process_b: u32,
+    ) -> Result<ChannelId, IpcError> {
         let channel_id = Uuid::new_v4();
         let channel = IpcChannel::new(process_a, process_b).await?;
-        
+
         self.channels.write().await.insert(channel_id, channel);
-        
+
         self.message_router.register_process(process_a).await?;
         self.message_router.register_process(process_b).await?;
 
-        log::info!("Created IPC channel {} between processes {} and {}", 
-                   channel_id, process_a, process_b);
+        log::info!(
+            "Created IPC channel {} between processes {} and {}",
+            channel_id,
+            process_a,
+            process_b
+        );
         Ok(channel_id)
     }
 
-    pub async fn send_message(&self, from: u32, to: u32, mut message: IpcMessage) -> Result<(), IpcError> {
+    pub async fn send_message(
+        &self,
+        from: u32,
+        to: u32,
+        mut message: IpcMessage,
+    ) -> Result<(), IpcError> {
         message.sender = from;
         message.recipient = to;
         message.timestamp = std::time::SystemTime::now()
@@ -147,14 +161,14 @@ impl IpcManager {
 
     pub async fn shutdown(&self) -> Result<(), IpcError> {
         log::info!("Shutting down IPC Manager");
-        
+
         let channels = std::mem::take(&mut *self.channels.write().await);
         for (id, channel) in channels {
             if let Err(e) = channel.shutdown().await {
                 log::error!("Failed to shutdown channel {}: {}", id, e);
             }
         }
-        
+
         self.shutdown_signal.notify_waiters();
         Ok(())
     }
@@ -208,26 +222,35 @@ impl MessageRouter {
 
         let (sender, receiver) = mpsc::unbounded_channel::<IpcMessage>();
         let handler = Arc::new(ProcessHandler::new(sender));
-        
-        self.routes.write().await.insert(process_id, Arc::clone(&handler));
-        self.spawn_process_worker(process_id, receiver, Arc::clone(&handler)).await;
+
+        self.routes
+            .write()
+            .await
+            .insert(process_id, Arc::clone(&handler));
+        self.spawn_process_worker(process_id, receiver, Arc::clone(&handler))
+            .await;
         Ok(())
     }
 
-    async fn spawn_process_worker(&self, process_id: u32, mut receiver: mpsc::UnboundedReceiver<IpcMessage>, handler: Arc<ProcessHandler>) {        
+    async fn spawn_process_worker(
+        &self,
+        process_id: u32,
+        mut receiver: mpsc::UnboundedReceiver<IpcMessage>,
+        handler: Arc<ProcessHandler>,
+    ) {
         tokio::spawn(async move {
             while let Some(message) = receiver.recv().await {
                 let priority_index = message.priority as usize;
-                
+
                 if let Some(queue) = handler.priority_queues.get(priority_index) {
                     queue.lock().await.push(message);
-                    
+
                     if let Ok(_permit) = handler.processing_semaphore.try_acquire() {
                         Self::process_priority_queues(process_id, &handler).await;
                     }
                 }
             }
-            
+
             log::info!("Process worker {} shutting down", process_id);
         });
     }
@@ -235,7 +258,7 @@ impl MessageRouter {
     async fn process_priority_queues(process_id: u32, handler: &ProcessHandler) {
         for priority_queue in &handler.priority_queues {
             let mut queue = priority_queue.lock().await;
-            
+
             while let Some(message) = queue.pop() {
                 if let Err(e) = Self::deliver_message(process_id, message).await {
                     log::error!("Failed to deliver message to process {}: {}", process_id, e);
@@ -249,22 +272,27 @@ impl MessageRouter {
     }
 
     async fn route_message(&self, message: IpcMessage) -> Result<(), IpcError> {
-        self.message_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        
+        self.message_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         let routes = self.routes.read().await;
         if let Some(handler) = routes.get(&message.recipient) {
-            handler.sender.send(message)
+            handler
+                .sender
+                .send(message)
                 .map_err(|_| IpcError::MessageDeliveryFailed)?;
         } else {
             drop(routes);
-            self.dead_letter_queue.send(message)
+            self.dead_letter_queue
+                .send(message)
                 .map_err(|_| IpcError::MessageDeliveryFailed)?;
         }
         Ok(())
     }
 
     fn get_message_count(&self) -> u64 {
-        self.message_counter.load(std::sync::atomic::Ordering::Relaxed)
+        self.message_counter
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -290,23 +318,35 @@ impl ProcessHandler {
 impl SecurityFilter {
     fn new() -> Self {
         let mut message_limits = HashMap::new();
-        
-        message_limits.insert(MessageType::RenderCommand, MessageLimits {
-            max_size: 1024 * 1024,
-            max_per_second: 100,
-        });
-        message_limits.insert(MessageType::DomUpdate, MessageLimits {
-            max_size: 512 * 1024,
-            max_per_second: 200,
-        });
-        message_limits.insert(MessageType::JavaScriptExecution, MessageLimits {
-            max_size: 2 * 1024 * 1024,
-            max_per_second: 50,
-        });
-        message_limits.insert(MessageType::ResourceRequest, MessageLimits {
-            max_size: 64 * 1024,
-            max_per_second: 500,
-        });
+
+        message_limits.insert(
+            MessageType::RenderCommand,
+            MessageLimits {
+                max_size: 1024 * 1024,
+                max_per_second: 100,
+            },
+        );
+        message_limits.insert(
+            MessageType::DomUpdate,
+            MessageLimits {
+                max_size: 512 * 1024,
+                max_per_second: 200,
+            },
+        );
+        message_limits.insert(
+            MessageType::JavaScriptExecution,
+            MessageLimits {
+                max_size: 2 * 1024 * 1024,
+                max_per_second: 50,
+            },
+        );
+        message_limits.insert(
+            MessageType::ResourceRequest,
+            MessageLimits {
+                max_size: 64 * 1024,
+                max_per_second: 500,
+            },
+        );
 
         Self {
             message_limits,
@@ -317,35 +357,46 @@ impl SecurityFilter {
 
     async fn validate_message(&self, message: &IpcMessage) -> Result<(), IpcError> {
         if !self.global_rate_limiter.check_rate().await {
-            return Err(IpcError::SecurityViolation("Global rate limit exceeded".to_string()));
+            return Err(IpcError::SecurityViolation(
+                "Global rate limit exceeded".to_string(),
+            ));
         }
 
         if let Some(limits) = self.message_limits.get(&message.message_type) {
             if message.payload.len() > limits.max_size {
-                return Err(IpcError::SecurityViolation(
-                    format!("Message size {} exceeds limit {}", message.payload.len(), limits.max_size)
-                ));
+                return Err(IpcError::SecurityViolation(format!(
+                    "Message size {} exceeds limit {}",
+                    message.payload.len(),
+                    limits.max_size
+                )));
             }
 
-            let rate_limiter = self.get_or_create_rate_limiter(message.sender, limits.max_per_second).await;
+            let rate_limiter = self
+                .get_or_create_rate_limiter(message.sender, limits.max_per_second)
+                .await;
             if !rate_limiter.check_rate().await {
-                return Err(IpcError::SecurityViolation(
-                    format!("Rate limit exceeded for process {}", message.sender)
-                ));
+                return Err(IpcError::SecurityViolation(format!(
+                    "Rate limit exceeded for process {}",
+                    message.sender
+                )));
             }
         }
 
         Ok(())
     }
 
-    async fn get_or_create_rate_limiter(&self, process_id: u32, max_per_second: u32) -> Arc<RateLimiter> {
+    async fn get_or_create_rate_limiter(
+        &self,
+        process_id: u32,
+        max_per_second: u32,
+    ) -> Arc<RateLimiter> {
         let limiters = self.process_rate_limiters.read().await;
-        
+
         if let Some(limiter) = limiters.get(&process_id) {
             Arc::clone(limiter)
         } else {
             drop(limiters);
-            
+
             let mut limiters = self.process_rate_limiters.write().await;
             let limiter = Arc::new(RateLimiter::new(max_per_second));
             limiters.insert(process_id, Arc::clone(&limiter));
@@ -363,7 +414,7 @@ impl RateLimiter {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_millis() as u64
+                    .as_millis() as u64,
             )),
             refill_rate: max_per_second,
         }
@@ -376,15 +427,18 @@ impl RateLimiter {
             .as_millis() as u64;
 
         let last_refill = self.last_refill.load(std::sync::atomic::Ordering::Relaxed);
-        
+
         if now > last_refill + 1000 {
-            self.last_refill.store(now, std::sync::atomic::Ordering::Relaxed);
-            self.tokens.store(self.max_tokens, std::sync::atomic::Ordering::Relaxed);
+            self.last_refill
+                .store(now, std::sync::atomic::Ordering::Relaxed);
+            self.tokens
+                .store(self.max_tokens, std::sync::atomic::Ordering::Relaxed);
         }
 
         let current_tokens = self.tokens.load(std::sync::atomic::Ordering::Relaxed);
         if current_tokens > 0 {
-            self.tokens.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            self.tokens
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             true
         } else {
             false

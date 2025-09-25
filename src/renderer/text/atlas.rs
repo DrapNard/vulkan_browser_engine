@@ -1,5 +1,5 @@
 use crate::renderer::gpu::Texture;
-use rusttype::{Glyph, Scale, point};
+use rusttype::{point, Glyph, Scale};
 use std::collections::HashMap;
 
 pub struct FontAtlas {
@@ -40,10 +40,10 @@ impl FontAtlas {
     }
 
     pub fn get_or_cache_glyph(
-        &mut self, 
-        character: char, 
-        glyph: &Glyph<'_>, 
-        scale: Scale
+        &mut self,
+        character: char,
+        glyph: &Glyph<'_>,
+        scale: Scale,
     ) -> Result<GlyphCoords, AtlasError> {
         if let Some(coords) = self.glyph_cache.get(&character) {
             return Ok(coords.clone());
@@ -52,7 +52,7 @@ impl FontAtlas {
         // Scale the glyph first, then position it
         let scaled_glyph = glyph.clone().scaled(scale);
         let positioned_glyph = scaled_glyph.positioned(point(0.0, 0.0));
-        
+
         if let Some(bounding_box) = positioned_glyph.pixel_bounding_box() {
             let glyph_width = (bounding_box.max.x - bounding_box.min.x) as u32;
             let glyph_height = (bounding_box.max.y - bounding_box.min.y) as u32;
@@ -136,7 +136,10 @@ impl FontAtlas {
         self.texture.as_ref().expect("Texture not created")
     }
 
-    pub fn update_texture(&mut self, _gpu_context: &crate::renderer::gpu::GpuContext) -> Result<(), AtlasError> {
+    pub fn update_texture(
+        &mut self,
+        _gpu_context: &crate::renderer::gpu::GpuContext,
+    ) -> Result<(), AtlasError> {
         // This would update the GPU texture with the current atlas data
         // Implementation would depend on the specific GPU context setup
         Ok(())

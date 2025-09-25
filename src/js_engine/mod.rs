@@ -1,24 +1,24 @@
-use std::sync::Arc;
-use std::hash::Hasher;
-use parking_lot::{RwLock, Mutex};
-use dashmap::DashMap;
-use thiserror::Error;
-use serde_json::Value;
-use tokio::sync::Semaphore;
-use std::time::{Duration, Instant};
 use ahash::AHasher;
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
+use serde_json::Value;
+use std::hash::Hasher;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use thiserror::Error;
+use tokio::sync::Semaphore;
 
 pub mod gc;
 pub mod jit;
 pub mod modules;
 pub mod v8_binding;
 
-use gc::{GarbageCollector, Heap as HeapManager};
-use jit::{JITCompiler, OptimizationLevel, JSFunction, CompiledFunction};
-use modules::ModuleResolver;
-use v8_binding::V8Runtime;
 use crate::core::dom::Document;
 use crate::BrowserConfig;
+use gc::{GarbageCollector, Heap as HeapManager};
+use jit::{CompiledFunction, JITCompiler, JSFunction, OptimizationLevel};
+use modules::ModuleResolver;
+use v8_binding::V8Runtime;
 
 const MAX_EXECUTION_CONTEXTS: usize = 1000;
 const SCRIPT_CACHE_MAX_SIZE: usize = 10000;
@@ -61,12 +61,14 @@ impl ModuleCache {
         if self.cache.len() >= SCRIPT_CACHE_MAX_SIZE {
             self.evict_expired();
         }
-        self.cache.insert(key.to_string(), (value.clone(), Instant::now()));
+        self.cache
+            .insert(key.to_string(), (value.clone(), Instant::now()));
     }
 
     fn evict_expired(&self) {
         let now = Instant::now();
-        self.cache.retain(|_, (_, timestamp)| now.duration_since(*timestamp) < self.ttl);
+        self.cache
+            .retain(|_, (_, timestamp)| now.duration_since(*timestamp) < self.ttl);
     }
 }
 
@@ -224,7 +226,7 @@ impl JSRuntime {
         let jit_compiler = Arc::new(
             JITCompiler::new(optimization_level)
                 .await
-                .map_err(|e| JSError::JIT(format!("JIT compiler initialization failed: {}", e)))?
+                .map_err(|e| JSError::JIT(format!("JIT compiler initialization failed: {}", e)))?,
         );
 
         let heap_manager = Arc::new(HeapManager::new());
@@ -261,7 +263,10 @@ impl JSRuntime {
             return Err(JSError::Disposed);
         }
 
-        let _permit = self.context_semaphore.acquire().await
+        let _permit = self
+            .context_semaphore
+            .acquire()
+            .await
             .map_err(|_| JSError::ContextLimit)?;
 
         let context_id = {
@@ -279,7 +284,8 @@ impl JSRuntime {
             last_used: Instant::now(),
         };
 
-        self.execution_contexts.insert(context_id, execution_context);
+        self.execution_contexts
+            .insert(context_id, execution_context);
 
         {
             let mut metrics = self.performance_metrics.write();
@@ -294,7 +300,12 @@ impl JSRuntime {
         self.execute_in_context(context_id, script, "inline").await
     }
 
-    pub async fn execute_in_context(&self, context_id: u64, script: &str, filename: &str) -> Result<Value> {
+    pub async fn execute_in_context(
+        &self,
+        context_id: u64,
+        script: &str,
+        filename: &str,
+    ) -> Result<Value> {
         if *self.disposed.read() {
             return Err(JSError::Disposed);
         }
@@ -302,19 +313,23 @@ impl JSRuntime {
         let start_time = Instant::now();
         let script_hash = self.calculate_script_hash(script, filename);
 
-        let should_jit = self.update_script_cache_and_check_jit(script_hash, filename).await;
+        let should_jit = self
+            .update_script_cache_and_check_jit(script_hash, filename)
+            .await;
 
         if should_jit {
-            self.trigger_jit_compilation(script_hash, script, filename).await;
+            self.trigger_jit_compilation(script_hash, script, filename)
+                .await;
         }
 
         let result = {
             let mut core = self.core.lock();
-            
+
             if let Some(jit_function) = self.get_jit_compiled_function(script_hash).await {
                 self.execute_jit_function(&jit_function, context_id).await
             } else {
-                core.v8_runtime.execute(script)
+                core.v8_runtime
+                    .execute(script)
                     .map_err(|e| JSError::Execution(e.to_string()))
             }
         }?;
@@ -338,9 +353,9 @@ impl JSRuntime {
             script_info.execution_count += 1;
             script_info.last_execution = Instant::now();
             *self.cache_hits.lock() += 1;
-            
-            return script_info.execution_count > JIT_THRESHOLD_EXECUTIONS 
-                && !script_info.jit_compiled 
+
+            return script_info.execution_count > JIT_THRESHOLD_EXECUTIONS
+                && !script_info.jit_compiled
                 && self.config.enable_jit;
         }
 
@@ -370,7 +385,7 @@ impl JSRuntime {
 
     async fn trigger_jit_compilation(&self, script_hash: u64, script: &str, filename: &str) {
         let jit_start = Instant::now();
-        
+
         let js_function = JSFunction {
             name: filename.to_string(),
             source_code: script.to_string(),
@@ -390,7 +405,7 @@ impl JSRuntime {
 
                 let mut metrics = self.performance_metrics.write();
                 metrics.jit_compilation_time_us += jit_start.elapsed().as_micros() as u64;
-            },
+            }
             Err(e) => {
                 tracing::warn!("JIT compilation failed for {}: {}", filename, e);
             }
@@ -401,7 +416,11 @@ impl JSRuntime {
         self.script_cache.get(&script_hash)?.jit_function.clone()
     }
 
-    async fn execute_jit_function(&self, _compiled_function: &CompiledFunction, _context_id: u64) -> Result<Value> {
+    async fn execute_jit_function(
+        &self,
+        _compiled_function: &CompiledFunction,
+        _context_id: u64,
+    ) -> Result<Value> {
         Ok(serde_json::Value::Null)
     }
 
@@ -414,13 +433,13 @@ impl JSRuntime {
     async fn update_performance_metrics(&self, start_time: Instant) {
         let execution_time = start_time.elapsed();
         let mut metrics = self.performance_metrics.write();
-        
+
         metrics.execution_time_us += execution_time.as_micros() as u64;
-        
+
         let hits = *self.cache_hits.lock();
         let misses = *self.cache_misses.lock();
         let total = hits + misses;
-        
+
         if total > 0 {
             metrics.cache_hit_rate = hits as f64 / total as f64;
         }
@@ -433,14 +452,14 @@ impl JSRuntime {
             core.heap_stats.update_usage(current_usage);
             core.heap_stats.usage_ratio() > GC_TRIGGER_HEAP_RATIO
         };
-        
+
         if should_gc {
             let gc_start = Instant::now();
             self.garbage_collector.lock().collect();
-            
+
             let mut metrics = self.performance_metrics.write();
             metrics.gc_time_us += gc_start.elapsed().as_micros() as u64;
-            
+
             let core = self.core.lock();
             metrics.heap_size_bytes = core.heap_stats.total_bytes;
             metrics.heap_used_bytes = core.heap_stats.used_bytes;
@@ -452,19 +471,26 @@ impl JSRuntime {
             return Err(JSError::Disposed);
         }
 
-        let context = self.execution_contexts.get(&context_id)
+        let context = self
+            .execution_contexts
+            .get(&context_id)
             .ok_or_else(|| JSError::Module("Context not found".to_string()))?;
 
         if let Some(cached_module) = context.module_cache.get(module_path) {
             return Ok(cached_module);
         }
 
-        let module_source = self.module_resolver.resolve(module_path, None)
-            .map_err(|e| JSError::Module(format!("Failed to resolve module {}: {}", module_path, e)))?;
+        let module_source = self
+            .module_resolver
+            .resolve(module_path, None)
+            .map_err(|e| {
+                JSError::Module(format!("Failed to resolve module {}: {}", module_path, e))
+            })?;
 
         let result = {
             let mut core = self.core.lock();
-            core.v8_runtime.execute(&module_source)
+            core.v8_runtime
+                .execute(&module_source)
                 .map_err(|e| JSError::Module(e.to_string()))?
         };
 
@@ -484,7 +510,7 @@ impl JSRuntime {
 
     pub async fn execute_inline_scripts(&self, document: &Document) -> Result<()> {
         let scripts = document.get_inline_scripts();
-        
+
         for script in scripts {
             if let Err(e) = self.execute(&script.content).await {
                 tracing::warn!("Failed to execute inline script: {}", e);
@@ -527,7 +553,8 @@ impl JSRuntime {
             return Ok(());
         }
 
-        let hot_scripts: Vec<_> = self.script_cache
+        let hot_scripts: Vec<_> = self
+            .script_cache
             .iter()
             .filter(|entry| entry.execution_count > 10 && !entry.jit_compiled)
             .map(|entry| (entry.source_hash, entry.filename.clone()))
@@ -545,7 +572,9 @@ impl JSRuntime {
                     parameters: Vec::new(),
                 };
 
-                if let Ok(compiled_function) = self.jit_compiler.compile_function(&js_function).await {
+                if let Ok(compiled_function) =
+                    self.jit_compiler.compile_function(&js_function).await
+                {
                     script_info.jit_compiled = true;
                     script_info.jit_function = Some(Arc::new(compiled_function));
                 }
@@ -557,7 +586,7 @@ impl JSRuntime {
 
     pub async fn clear_context(&self, context_id: u64) -> Result<()> {
         self.execution_contexts.remove(&context_id);
-        
+
         {
             let mut metrics = self.performance_metrics.write();
             metrics.context_count = self.execution_contexts.len() as u32;
@@ -571,9 +600,8 @@ impl JSRuntime {
         let now = Instant::now();
         let ttl = Duration::from_secs(1800);
 
-        self.execution_contexts.retain(|_, context| {
-            now.duration_since(context.last_used) < ttl
-        });
+        self.execution_contexts
+            .retain(|_, context| now.duration_since(context.last_used) < ttl);
 
         {
             let mut metrics = self.performance_metrics.write();

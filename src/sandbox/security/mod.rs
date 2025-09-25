@@ -314,11 +314,14 @@ impl SecurityFramework {
         let threat_analysis = self.threat_detector.analyze_threat(&event).await;
         let behavioral_analysis = self.threat_detector.analyze_behavior(&event).await;
 
-        let combined_threat_score = (threat_analysis.threat_score + behavioral_analysis.risk_score) / 2.0;
+        let combined_threat_score =
+            (threat_analysis.threat_score + behavioral_analysis.risk_score) / 2.0;
         let threat_level = Self::calculate_threat_level(combined_threat_score, event.severity);
 
         if threat_level <= ThreatLevel::Medium {
-            self.incident_responder.respond_to_incident(&event, threat_level).await;
+            self.incident_responder
+                .respond_to_incident(&event, threat_level)
+                .await;
         }
 
         let compliance_impact = self.compliance_monitor.assess_impact(&event).await;
@@ -352,7 +355,11 @@ impl SecurityFramework {
 
     fn get_recommended_actions(threat_level: ThreatLevel) -> Vec<ResponseAction> {
         match threat_level {
-            ThreatLevel::Critical => vec![ResponseAction::Terminate, ResponseAction::Alert, ResponseAction::Investigate],
+            ThreatLevel::Critical => vec![
+                ResponseAction::Terminate,
+                ResponseAction::Alert,
+                ResponseAction::Investigate,
+            ],
             ThreatLevel::High => vec![ResponseAction::Quarantine, ResponseAction::Alert],
             ThreatLevel::Medium => vec![ResponseAction::Block, ResponseAction::Log],
             ThreatLevel::Low => vec![ResponseAction::Log],
@@ -360,11 +367,15 @@ impl SecurityFramework {
     }
 
     fn generate_policy_violations(&self, analysis: &ThreatAnalysis) -> Vec<PolicyViolation> {
-        analysis.matched_rules.iter().map(|rule_id| PolicyViolation {
-            rule_id: rule_id.clone(),
-            description: format!("Security rule {} triggered", rule_id),
-            severity: SecuritySeverity::High,
-        }).collect()
+        analysis
+            .matched_rules
+            .iter()
+            .map(|rule_id| PolicyViolation {
+                rule_id: rule_id.clone(),
+                description: format!("Security rule {} triggered", rule_id),
+                severity: SecuritySeverity::High,
+            })
+            .collect()
     }
 
     pub async fn get_security_status(&self) -> SecurityStatus {
@@ -382,7 +393,10 @@ impl SecurityFramework {
     }
 
     fn calculate_overall_risk(threats: &[SecurityEvent]) -> RiskLevel {
-        if threats.iter().any(|t| t.severity == SecuritySeverity::Critical) {
+        if threats
+            .iter()
+            .any(|t| t.severity == SecuritySeverity::Critical)
+        {
             RiskLevel::Critical
         } else if threats.iter().any(|t| t.severity == SecuritySeverity::High) {
             RiskLevel::High
@@ -476,7 +490,8 @@ impl AnomalyDetector {
     }
 
     async fn calculate_anomaly_score(&self, event: &SecurityEvent) -> f64 {
-        self.baseline_models.get(&event.source_process)
+        self.baseline_models
+            .get(&event.source_process)
             .map(Self::compare_to_baseline)
             .unwrap_or(0.0)
     }
@@ -501,20 +516,27 @@ impl BehaviorAnalyzer {
 
     fn load_behavior_patterns() -> HashMap<String, BehaviorPattern> {
         let mut patterns = HashMap::new();
-        
-        patterns.insert("rapid_execution".to_string(), BehaviorPattern {
-            pattern_name: "Rapid Process Execution".to_string(),
-            indicators: vec!["high_process_creation_rate".to_string()],
-            risk_weight: 0.6,
-            time_window: Duration::from_secs(60),
-        });
+
+        patterns.insert(
+            "rapid_execution".to_string(),
+            BehaviorPattern {
+                pattern_name: "Rapid Process Execution".to_string(),
+                indicators: vec!["high_process_creation_rate".to_string()],
+                risk_weight: 0.6,
+                time_window: Duration::from_secs(60),
+            },
+        );
 
         patterns
     }
 
     async fn analyze(&self, event: &SecurityEvent) -> BehaviorAnalysis {
-        let current_score = self.risk_scores.get(&event.source_process).copied().unwrap_or(0.0);
-        
+        let current_score = self
+            .risk_scores
+            .get(&event.source_process)
+            .copied()
+            .unwrap_or(0.0);
+
         BehaviorAnalysis {
             risk_score: current_score,
             behavioral_indicators: Vec::new(),
@@ -540,20 +562,34 @@ impl IncidentResponder {
 
     async fn respond_to_incident(&self, event: &SecurityEvent, threat_level: ThreatLevel) {
         if let Some(action) = self.response_policies.get(&threat_level) {
-            self.execute_response_action(action, event, threat_level).await;
+            self.execute_response_action(action, event, threat_level)
+                .await;
         }
     }
 
-    async fn execute_response_action(&self, action: &ResponseAction, event: &SecurityEvent, threat_level: ThreatLevel) {
+    async fn execute_response_action(
+        &self,
+        action: &ResponseAction,
+        event: &SecurityEvent,
+        threat_level: ThreatLevel,
+    ) {
         match action {
             ResponseAction::Terminate => {
-                tracing::error!("CRITICAL: Terminating process {} due to security threat", event.source_process);
+                tracing::error!(
+                    "CRITICAL: Terminating process {} due to security threat",
+                    event.source_process
+                );
             }
             ResponseAction::Quarantine => {
-                self.quarantine_manager.quarantine_process(event.source_process, threat_level).await;
+                self.quarantine_manager
+                    .quarantine_process(event.source_process, threat_level)
+                    .await;
             }
             ResponseAction::Block => {
-                tracing::warn!("Blocking suspicious activity from process {}", event.source_process);
+                tracing::warn!(
+                    "Blocking suspicious activity from process {}",
+                    event.source_process
+                );
             }
             ResponseAction::Alert => {
                 self.alert_system.send_alert(event, threat_level).await;
@@ -562,10 +598,17 @@ impl IncidentResponder {
                 tracing::info!("Security event logged: {:?}", event);
             }
             ResponseAction::Investigate => {
-                tracing::info!("Investigation triggered for process {}", event.source_process);
+                tracing::info!(
+                    "Investigation triggered for process {}",
+                    event.source_process
+                );
             }
             ResponseAction::Allow | ResponseAction::Deny => {
-                tracing::debug!("Access control action: {:?} for process {}", action, event.source_process);
+                tracing::debug!(
+                    "Access control action: {:?} for process {}",
+                    action,
+                    event.source_process
+                );
             }
         }
     }
@@ -585,19 +628,22 @@ impl QuarantineManager {
 
     fn create_default_policies() -> HashMap<ThreatLevel, QuarantinePolicy> {
         let mut policies = HashMap::new();
-        
-        policies.insert(ThreatLevel::Critical, QuarantinePolicy {
-            isolation_level: IsolationLevel::Complete,
-            resource_limits: QuarantineResourceLimits {
-                max_memory: 64 * 1024 * 1024,
-                max_cpu: 5,
-                max_network_bandwidth: 0,
-                max_file_operations: 0,
+
+        policies.insert(
+            ThreatLevel::Critical,
+            QuarantinePolicy {
+                isolation_level: IsolationLevel::Complete,
+                resource_limits: QuarantineResourceLimits {
+                    max_memory: 64 * 1024 * 1024,
+                    max_cpu: 5,
+                    max_network_bandwidth: 0,
+                    max_file_operations: 0,
+                },
+                network_isolation: true,
+                file_system_isolation: true,
+                duration: None,
             },
-            network_isolation: true,
-            file_system_isolation: true,
-            duration: None,
-        });
+        );
 
         policies
     }
@@ -605,7 +651,11 @@ impl QuarantineManager {
     async fn quarantine_process(&self, process_id: u32, threat_level: ThreatLevel) {
         let mut quarantined = self.quarantined_processes.write().await;
         quarantined.insert(process_id);
-        tracing::warn!("Quarantining process {} with threat level {:?}", process_id, threat_level);
+        tracing::warn!(
+            "Quarantining process {} with threat level {:?}",
+            process_id,
+            threat_level
+        );
     }
 
     async fn get_quarantined_count(&self) -> usize {
@@ -616,19 +666,18 @@ impl QuarantineManager {
 impl AlertSystem {
     fn new() -> Self {
         Self {
-            alert_channels: vec![
-                AlertChannel::SystemLog,
-                AlertChannel::Dashboard,
-            ],
+            alert_channels: vec![AlertChannel::SystemLog, AlertChannel::Dashboard],
             escalation_rules: Vec::new(),
             notification_history: Vec::new(),
         }
     }
 
     async fn send_alert(&self, event: &SecurityEvent, threat_level: ThreatLevel) {
-        let message = format!("Security Alert: {:?} threat detected from process {}", 
-            threat_level, event.source_process);
-        
+        let message = format!(
+            "Security Alert: {:?} threat detected from process {}",
+            threat_level, event.source_process
+        );
+
         for channel in &self.alert_channels {
             self.send_to_channel(channel, &message).await;
         }
@@ -639,8 +688,7 @@ impl AlertSystem {
             AlertChannel::SystemLog => {
                 tracing::error!("{}", message);
             }
-            AlertChannel::Dashboard => {
-            }
+            AlertChannel::Dashboard => {}
             AlertChannel::Email(addr) => {
                 tracing::info!("Sending email alert to {}: {}", addr, message);
             }
@@ -657,10 +705,7 @@ impl AlertSystem {
 impl ComplianceMonitor {
     fn new() -> Self {
         Self {
-            compliance_frameworks: vec![
-                ComplianceFramework::Gdpr,
-                ComplianceFramework::Iso27001,
-            ],
+            compliance_frameworks: vec![ComplianceFramework::Gdpr, ComplianceFramework::Iso27001],
             audit_trail: Arc::new(RwLock::new(Vec::new())),
             violation_tracker: ViolationTracker::new(),
         }
@@ -672,9 +717,16 @@ impl ComplianceMonitor {
         }
     }
 
-    async fn check_framework_compliance(&self, framework: &ComplianceFramework, event: &SecurityEvent) {
+    async fn check_framework_compliance(
+        &self,
+        framework: &ComplianceFramework,
+        event: &SecurityEvent,
+    ) {
         let compliance_event = ComplianceEvent {
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             framework: framework.clone(),
             requirement: "Data Protection".to_string(),
             status: ComplianceStatus::Compliant,

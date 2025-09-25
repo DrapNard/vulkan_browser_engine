@@ -26,7 +26,9 @@ impl QuotaManager {
         let available = self.global_quota - self.used_quota;
         let granted = requested.min(available);
 
-        let quota = self.origin_quotas.entry(origin.to_string())
+        let quota = self
+            .origin_quotas
+            .entry(origin.to_string())
             .or_insert_with(|| OriginQuota {
                 origin: origin.to_string(),
                 quota: 0,
@@ -53,7 +55,9 @@ impl QuotaManager {
             return Err(QuotaError::QuotaExceeded);
         }
 
-        let quota = self.origin_quotas.entry(origin.to_string())
+        let quota = self
+            .origin_quotas
+            .entry(origin.to_string())
             .or_insert_with(|| OriginQuota {
                 origin: origin.to_string(),
                 quota: size,
@@ -102,7 +106,9 @@ impl QuotaManager {
         StorageEstimate {
             quota: self.global_quota,
             usage: self.used_quota,
-            usage_details: self.origin_quotas.iter()
+            usage_details: self
+                .origin_quotas
+                .iter()
                 .map(|(origin, quota)| (origin.clone(), quota.used))
                 .collect(),
         }

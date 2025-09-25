@@ -4,13 +4,13 @@ pub mod events;
 pub mod layout;
 pub mod network;
 
-use crate::js_engine::{JSRuntime, JSError};
-use crate::renderer::{VulkanRenderer, RenderError, LayoutTree, ElementType};
+use crate::js_engine::{JSError, JSRuntime};
+use crate::renderer::{ElementType, LayoutTree, RenderError, VulkanRenderer};
 use css::computed::StyleEngine;
 use dom::Document;
 use events::EventSystem;
 use layout::LayoutEngine;
-use network::{NetworkManager};
+use network::NetworkManager;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -63,10 +63,10 @@ impl CoreEngine {
     pub async fn load_url(&mut self, url: &str) -> Result<(), CoreError> {
         let html = self.network.fetch(url).await?;
         let mut doc_guard = self.dom.write().await;
-        *doc_guard = Document::parse(&html)
-            .map_err(|e| CoreError::ParseError(e.to_string()))?;
+        *doc_guard = Document::parse(&html).map_err(|e| CoreError::ParseError(e.to_string()))?;
         self.style_engine.compute_styles(&doc_guard);
-        self.layout_engine.compute_layout(&doc_guard, &self.style_engine);
+        self.layout_engine
+            .compute_layout(&doc_guard, &self.style_engine);
         Ok(())
     }
 
@@ -75,19 +75,23 @@ impl CoreEngine {
     }
 
     pub async fn render_frame(&mut self) -> Result<(), CoreError> {
-    let doc_guard = self.dom.read().await;
-    let root_node_id = doc_guard.get_root_node().ok_or_else(|| CoreError::ParseError("No root node found".to_string()))?;
-    let layout_root = self.layout_engine.get_layout_box(root_node_id);
-    let layout_box = layout_root.as_ref().ok_or_else(|| CoreError::ParseError("No layout tree found".to_string()))?;
-    
-    let mut layout_tree = LayoutTree::new();
-    layout_tree.from_layout_box(
-        root_node_id,
-        *layout_box,
-        ElementType::Block // or ElementType::Div, ElementType::Document, etc.
-    );
-    
-    self.renderer.render(&doc_guard, &layout_tree).await?;
-    Ok(())
-}
+        let doc_guard = self.dom.read().await;
+        let root_node_id = doc_guard
+            .get_root_node()
+            .ok_or_else(|| CoreError::ParseError("No root node found".to_string()))?;
+        let layout_root = self.layout_engine.get_layout_box(root_node_id);
+        let layout_box = layout_root
+            .as_ref()
+            .ok_or_else(|| CoreError::ParseError("No layout tree found".to_string()))?;
+
+        let mut layout_tree = LayoutTree::new();
+        layout_tree.from_layout_box(
+            root_node_id,
+            *layout_box,
+            ElementType::Block, // or ElementType::Div, ElementType::Document, etc.
+        );
+
+        self.renderer.render(&doc_guard, &layout_tree).await?;
+        Ok(())
+    }
 }

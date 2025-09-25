@@ -26,8 +26,7 @@ pub struct Manifest {
     pub prefer_related_applications: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum DisplayMode {
     #[serde(rename = "fullscreen")]
     Fullscreen,
@@ -79,8 +78,7 @@ pub struct Icon {
     pub purpose: Option<IconPurpose>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum IconPurpose {
     #[serde(rename = "any")]
     #[default]
@@ -149,8 +147,6 @@ impl Default for Manifest {
         }
     }
 }
-
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {

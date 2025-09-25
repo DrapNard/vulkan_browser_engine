@@ -1,14 +1,14 @@
 use super::ServiceWorkerError;
 use crate::js_engine::JSRuntime as JsEngine;
 use crate::BrowserConfig;
+use base64::{engine::general_purpose, Engine as _};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
-use tracing::{info, error, warn};
-use serde_json::Value;
-use base64::{Engine as _, engine::general_purpose};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct ServiceWorkerConfig {
@@ -91,23 +91,32 @@ impl ServiceWorkerRuntime {
         BrowserConfig::default()
     }
 
-    pub async fn install_worker(&self, script_url: &str, scope: &str) -> Result<String, ServiceWorkerError> {
+    pub async fn install_worker(
+        &self,
+        script_url: &str,
+        scope: &str,
+    ) -> Result<String, ServiceWorkerError> {
         let worker_id = self.generate_worker_id(script_url, scope);
-        
+
         if self.workers.read().await.len() >= self.config.max_workers {
-            return Err(ServiceWorkerError::ExecutionError("Maximum workers reached".to_string()));
+            return Err(ServiceWorkerError::ExecutionError(
+                "Maximum workers reached".to_string(),
+            ));
         }
 
         let script_content = self.fetch_script_with_validation(script_url).await?;
-        
+
         let js_config = Self::create_service_worker_js_config();
-        
-        let mut js_engine = JsEngine::new(&js_config).await
+
+        let mut js_engine = JsEngine::new(&js_config)
+            .await
             .map_err(|e| ServiceWorkerError::ScriptError(e.to_string()))?;
 
-        self.setup_service_worker_environment(&mut js_engine, scope, &worker_id).await?;
-        
-        self.execute_script_safely(&mut js_engine, &script_content, "worker_installation").await?;
+        self.setup_service_worker_environment(&mut js_engine, scope, &worker_id)
+            .await?;
+
+        self.execute_script_safely(&mut js_engine, &script_content, "worker_installation")
+            .await?;
 
         let event_handlers = self.extract_event_handlers(&mut js_engine).await?;
 
@@ -134,12 +143,13 @@ impl ServiceWorkerRuntime {
 
     pub async fn activate_worker(&self, worker_id: &str) -> Result<(), ServiceWorkerError> {
         let mut workers = self.workers.write().await;
-        let worker = workers.get_mut(worker_id)
+        let worker = workers
+            .get_mut(worker_id)
             .ok_or_else(|| ServiceWorkerError::WorkerNotFound(worker_id.to_string()))?;
 
         if worker.state != WorkerState::Installed {
             return Err(ServiceWorkerError::ExecutionError(format!(
-                "Worker {} cannot be activated from state {:?}", 
+                "Worker {} cannot be activated from state {:?}",
                 worker_id, worker.state
             )));
         }
@@ -170,14 +180,15 @@ impl ServiceWorkerRuntime {
     }
 
     pub async fn handle_fetch_event(
-        &self, 
-        worker_id: &str, 
-        request: &crate::pwa::FetchRequest
+        &self,
+        worker_id: &str,
+        request: &crate::pwa::FetchRequest,
     ) -> Result<Option<crate::pwa::FetchResponse>, ServiceWorkerError> {
         let start_time = Instant::now();
-        
+
         let mut workers = self.workers.write().await;
-        let worker = workers.get_mut(worker_id)
+        let worker = workers
+            .get_mut(worker_id)
             .ok_or_else(|| ServiceWorkerError::WorkerNotFound(worker_id.to_string()))?;
 
         if worker.state != WorkerState::Activated || !worker.event_handlers.fetch {
@@ -187,8 +198,15 @@ impl ServiceWorkerRuntime {
         worker.last_activity = Instant::now();
 
         let fetch_event_script = self.create_fetch_event_script(request)?;
-        
-        match self.execute_with_timeout(&mut worker.js_engine, &fetch_event_script, self.config.execution_timeout).await {
+
+        match self
+            .execute_with_timeout(
+                &mut worker.js_engine,
+                &fetch_event_script,
+                self.config.execution_timeout,
+            )
+            .await
+        {
             Ok(result) => {
                 let duration = start_time.elapsed();
                 self.update_execution_stats(&mut worker.execution_stats, duration, true);
@@ -202,23 +220,31 @@ impl ServiceWorkerRuntime {
             Err(e) => {
                 let duration = start_time.elapsed();
                 self.update_execution_stats(&mut worker.execution_stats, duration, false);
-                error!("Fetch event execution failed for worker {}: {}", worker_id, e);
+                error!(
+                    "Fetch event execution failed for worker {}: {}",
+                    worker_id, e
+                );
                 Err(e)
             }
         }
     }
 
-    pub async fn get_worker_stats(&self, worker_id: &str) -> Result<ExecutionStats, ServiceWorkerError> {
+    pub async fn get_worker_stats(
+        &self,
+        worker_id: &str,
+    ) -> Result<ExecutionStats, ServiceWorkerError> {
         let workers = self.workers.read().await;
-        let worker = workers.get(worker_id)
+        let worker = workers
+            .get(worker_id)
             .ok_or_else(|| ServiceWorkerError::WorkerNotFound(worker_id.to_string()))?;
-        
+
         Ok(worker.execution_stats.clone())
     }
 
     pub async fn list_active_workers(&self) -> Vec<String> {
         let workers = self.workers.read().await;
-        workers.values()
+        workers
+            .values()
             .filter(|w| matches!(w.state, WorkerState::Activated))
             .map(|w| w.id.clone())
             .collect()
@@ -230,8 +256,9 @@ impl ServiceWorkerRuntime {
         let mut removed = 0;
 
         workers.retain(|id, worker| {
-            if worker.state == WorkerState::Redundant || 
-               (now.duration_since(worker.last_activity) > self.config.max_idle_time) {
+            if worker.state == WorkerState::Redundant
+                || (now.duration_since(worker.last_activity) > self.config.max_idle_time)
+            {
                 warn!("Cleaning up inactive worker: {}", id);
                 removed += 1;
                 false
@@ -244,10 +271,10 @@ impl ServiceWorkerRuntime {
     }
 
     async fn setup_service_worker_environment(
-        &self, 
-        js_engine: &mut JsEngine, 
-        scope: &str, 
-        worker_id: &str
+        &self,
+        js_engine: &mut JsEngine,
+        scope: &str,
+        worker_id: &str,
     ) -> Result<(), ServiceWorkerError> {
         let globals_script = format!(
             r#"
@@ -372,7 +399,8 @@ impl ServiceWorkerRuntime {
             worker_id, scope
         );
 
-        self.execute_script_safely(js_engine, &globals_script, "globals_setup").await?;
+        self.execute_script_safely(js_engine, &globals_script, "globals_setup")
+            .await?;
         Ok(())
     }
 
@@ -380,13 +408,13 @@ impl ServiceWorkerRuntime {
         &self,
         js_engine: &mut JsEngine,
         script: &str,
-        context: &str
+        context: &str,
     ) -> Result<(), ServiceWorkerError> {
         timeout(self.config.script_timeout, js_engine.execute(script))
             .await
             .map_err(|_| ServiceWorkerError::ExecutionError(format!("Timeout in {}", context)))?
             .map_err(|e| ServiceWorkerError::ScriptError(format!("{}: {}", context, e)))?;
-        
+
         Ok(())
     }
 
@@ -394,16 +422,21 @@ impl ServiceWorkerRuntime {
         &self,
         js_engine: &mut JsEngine,
         script: &str,
-        timeout_duration: Duration
+        timeout_duration: Duration,
     ) -> Result<Option<Value>, ServiceWorkerError> {
         timeout(timeout_duration, js_engine.execute(script))
             .await
-            .map_err(|_| ServiceWorkerError::ExecutionError("Script execution timeout".to_string()))?
+            .map_err(|_| {
+                ServiceWorkerError::ExecutionError("Script execution timeout".to_string())
+            })?
             .map_err(|e| ServiceWorkerError::ExecutionError(e.to_string()))
             .map(Some)
     }
 
-    async fn extract_event_handlers(&self, js_engine: &mut JsEngine) -> Result<EventHandlerRegistry, ServiceWorkerError> {
+    async fn extract_event_handlers(
+        &self,
+        js_engine: &mut JsEngine,
+    ) -> Result<EventHandlerRegistry, ServiceWorkerError> {
         let check_script = r#"
             JSON.stringify({
                 install: typeof self.oninstall === 'function',
@@ -416,12 +449,14 @@ impl ServiceWorkerRuntime {
             })
         "#;
 
-        let result = self.execute_with_timeout(js_engine, check_script, Duration::from_secs(2)).await?;
-        
+        let result = self
+            .execute_with_timeout(js_engine, check_script, Duration::from_secs(2))
+            .await?;
+
         if let Some(Value::String(json_str)) = result {
             let handlers: serde_json::Value = serde_json::from_str(&json_str)
                 .map_err(|e| ServiceWorkerError::ScriptError(e.to_string()))?;
-            
+
             Ok(EventHandlerRegistry {
                 install: handlers["install"].as_bool().unwrap_or(false),
                 activate: handlers["activate"].as_bool().unwrap_or(false),
@@ -456,10 +491,16 @@ impl ServiceWorkerRuntime {
         "#;
 
         let mut workers = self.workers.write().await;
-        let worker = workers.get_mut(worker_id)
+        let worker = workers
+            .get_mut(worker_id)
             .ok_or_else(|| ServiceWorkerError::WorkerNotFound(worker_id.to_string()))?;
 
-        self.execute_with_timeout(&mut worker.js_engine, install_script, Duration::from_secs(30)).await?;
+        self.execute_with_timeout(
+            &mut worker.js_engine,
+            install_script,
+            Duration::from_secs(30),
+        )
+        .await?;
         worker.state = WorkerState::Installed;
 
         Ok(())
@@ -485,15 +526,24 @@ impl ServiceWorkerRuntime {
         "#;
 
         let mut workers = self.workers.write().await;
-        let worker = workers.get_mut(worker_id)
+        let worker = workers
+            .get_mut(worker_id)
             .ok_or_else(|| ServiceWorkerError::WorkerNotFound(worker_id.to_string()))?;
 
-        self.execute_with_timeout(&mut worker.js_engine, activate_script, Duration::from_secs(30)).await?;
+        self.execute_with_timeout(
+            &mut worker.js_engine,
+            activate_script,
+            Duration::from_secs(30),
+        )
+        .await?;
 
         Ok(())
     }
 
-    fn create_fetch_event_script(&self, request: &crate::pwa::FetchRequest) -> Result<String, ServiceWorkerError> {
+    fn create_fetch_event_script(
+        &self,
+        request: &crate::pwa::FetchRequest,
+    ) -> Result<String, ServiceWorkerError> {
         let headers_json = serde_json::to_string(&request.headers)
             .map_err(|e| ServiceWorkerError::ScriptError(e.to_string()))?;
 
@@ -544,14 +594,29 @@ impl ServiceWorkerRuntime {
         ))
     }
 
-    fn parse_fetch_response(&self, response_data: Value) -> Result<Option<crate::pwa::FetchResponse>, ServiceWorkerError> {
+    fn parse_fetch_response(
+        &self,
+        response_data: Value,
+    ) -> Result<Option<crate::pwa::FetchResponse>, ServiceWorkerError> {
         if let Some(obj) = response_data.as_object() {
-            if obj.get("handled").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if obj
+                .get("handled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 let status = obj.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
-                let headers = obj.get("headers").and_then(|v| v.as_object())
-                    .map(|h| h.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+                let headers = obj
+                    .get("headers")
+                    .and_then(|v| v.as_object())
+                    .map(|h| {
+                        h.iter()
+                            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                            .collect()
+                    })
                     .unwrap_or_default();
-                let body = obj.get("body").and_then(|v| v.as_str())
+                let body = obj
+                    .get("body")
+                    .and_then(|v| v.as_str())
                     .map(|s| s.as_bytes().to_vec())
                     .unwrap_or_default();
 
@@ -573,47 +638,56 @@ impl ServiceWorkerRuntime {
         }
     }
 
-    async fn fetch_script_with_validation(&self, script_url: &str) -> Result<String, ServiceWorkerError> {
-        if self.config.enable_https_only && 
-           !script_url.starts_with("https://") && 
-           !script_url.starts_with("http://localhost") {
+    async fn fetch_script_with_validation(
+        &self,
+        script_url: &str,
+    ) -> Result<String, ServiceWorkerError> {
+        if self.config.enable_https_only
+            && !script_url.starts_with("https://")
+            && !script_url.starts_with("http://localhost")
+        {
             return Err(ServiceWorkerError::NetworkError(
-                "Service Worker scripts must be served over HTTPS".to_string()
+                "Service Worker scripts must be served over HTTPS".to_string(),
             ));
         }
 
         let response = timeout(
             Duration::from_secs(30),
-            self.http_client.get(script_url).send()
+            self.http_client.get(script_url).send(),
         )
         .await
         .map_err(|_| ServiceWorkerError::NetworkError("Network timeout".to_string()))?
         .map_err(|e| ServiceWorkerError::NetworkError(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(ServiceWorkerError::NetworkError(
-                format!("HTTP {}: Failed to fetch script", response.status())
-            ));
+            return Err(ServiceWorkerError::NetworkError(format!(
+                "HTTP {}: Failed to fetch script",
+                response.status()
+            )));
         }
 
-        let content_type = response.headers()
+        let content_type = response
+            .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
         if !content_type.contains("javascript") && !content_type.contains("text/") {
             return Err(ServiceWorkerError::NetworkError(
-                "Invalid content type for Service Worker script".to_string()
+                "Invalid content type for Service Worker script".to_string(),
             ));
         }
 
-        let script_content = response.text().await
+        let script_content = response
+            .text()
+            .await
             .map_err(|e| ServiceWorkerError::NetworkError(e.to_string()))?;
 
         if script_content.len() > self.config.max_script_size {
-            return Err(ServiceWorkerError::NetworkError(
-                format!("Service Worker script too large (max {}MB)", self.config.max_script_size / (1024 * 1024))
-            ));
+            return Err(ServiceWorkerError::NetworkError(format!(
+                "Service Worker script too large (max {}MB)",
+                self.config.max_script_size / (1024 * 1024)
+            )));
         }
 
         Ok(script_content)
@@ -629,16 +703,23 @@ impl ServiceWorkerRuntime {
         format!("sw_{:x}", hasher.finish())
     }
 
-    fn update_execution_stats(&self, stats: &mut ExecutionStats, duration: Duration, success: bool) {
+    fn update_execution_stats(
+        &self,
+        stats: &mut ExecutionStats,
+        duration: Duration,
+        success: bool,
+    ) {
         stats.total_executions += 1;
         stats.total_duration += duration;
         stats.last_execution_time = Some(duration);
-        
+
         if !success {
             stats.error_count += 1;
         }
-        
-        stats.success_rate = ((stats.total_executions - stats.error_count) as f64 / stats.total_executions as f64) * 100.0;
+
+        stats.success_rate = ((stats.total_executions - stats.error_count) as f64
+            / stats.total_executions as f64)
+            * 100.0;
     }
 }
 
@@ -654,4 +735,3 @@ impl Default for ServiceWorkerConfig {
         }
     }
 }
-

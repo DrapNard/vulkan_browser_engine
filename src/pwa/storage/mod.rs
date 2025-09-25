@@ -41,8 +41,9 @@ impl StorageManager {
             .unwrap_or_else(|| PathBuf::from("./data"))
             .join("vulkan-renderer")
             .join("storage");
-        
-        fs::create_dir_all(&storage_root).await
+
+        fs::create_dir_all(&storage_root)
+            .await
             .map_err(|e| StorageError::IoError(e.to_string()))?;
 
         Ok(Self {
@@ -54,9 +55,13 @@ impl StorageManager {
         })
     }
 
-    pub async fn open_database(&mut self, name: &str, version: u32) -> Result<&mut IndexedDatabase, StorageError> {
+    pub async fn open_database(
+        &mut self,
+        name: &str,
+        version: u32,
+    ) -> Result<&mut IndexedDatabase, StorageError> {
         let key = format!("{}:{}", name, version);
-        
+
         if !self.databases.contains_key(&key) {
             let db = IndexedDatabase {
                 name: name.to_string(),
@@ -70,7 +75,9 @@ impl StorageManager {
     }
 
     pub async fn delete_database(&mut self, name: &str) -> Result<(), StorageError> {
-        let keys_to_remove: Vec<String> = self.databases.keys()
+        let keys_to_remove: Vec<String> = self
+            .databases
+            .keys()
             .filter(|key| key.starts_with(&format!("{}:", name)))
             .cloned()
             .collect();
@@ -81,16 +88,24 @@ impl StorageManager {
 
         let db_path = self.storage_root.join(format!("{}.db", name));
         if db_path.exists() {
-            fs::remove_file(db_path).await
+            fs::remove_file(db_path)
+                .await
                 .map_err(|e| StorageError::IoError(e.to_string()))?;
         }
 
         Ok(())
     }
 
-    pub async fn create_object_store(&mut self, db_name: &str, db_version: u32, store_name: &str, key_path: Option<String>, auto_increment: bool) -> Result<(), StorageError> {
+    pub async fn create_object_store(
+        &mut self,
+        db_name: &str,
+        db_version: u32,
+        store_name: &str,
+        key_path: Option<String>,
+        auto_increment: bool,
+    ) -> Result<(), StorageError> {
         let db = self.open_database(db_name, db_version).await?;
-        
+
         let store = ObjectStore {
             name: store_name.to_string(),
             key_path,
@@ -103,9 +118,16 @@ impl StorageManager {
         Ok(())
     }
 
-    pub async fn put_object(&mut self, db_name: &str, db_version: u32, store_name: &str, key: &str, value: serde_json::Value) -> Result<(), StorageError> {
+    pub async fn put_object(
+        &mut self,
+        db_name: &str,
+        db_version: u32,
+        store_name: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), StorageError> {
         let db = self.open_database(db_name, db_version).await?;
-        
+
         if let Some(store) = db.object_stores.get_mut(store_name) {
             store.data.insert(key.to_string(), value);
             Ok(())
@@ -114,9 +136,15 @@ impl StorageManager {
         }
     }
 
-    pub async fn get_object(&self, db_name: &str, db_version: u32, store_name: &str, key: &str) -> Result<Option<serde_json::Value>, StorageError> {
+    pub async fn get_object(
+        &self,
+        db_name: &str,
+        db_version: u32,
+        store_name: &str,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>, StorageError> {
         let db_key = format!("{}:{}", db_name, db_version);
-        
+
         if let Some(db) = self.databases.get(&db_key) {
             if let Some(store) = db.object_stores.get(store_name) {
                 Ok(store.data.get(key).cloned())
@@ -128,9 +156,15 @@ impl StorageManager {
         }
     }
 
-    pub async fn delete_object(&mut self, db_name: &str, db_version: u32, store_name: &str, key: &str) -> Result<bool, StorageError> {
+    pub async fn delete_object(
+        &mut self,
+        db_name: &str,
+        db_version: u32,
+        store_name: &str,
+        key: &str,
+    ) -> Result<bool, StorageError> {
         let db = self.open_database(db_name, db_version).await?;
-        
+
         if let Some(store) = db.object_stores.get_mut(store_name) {
             Ok(store.data.remove(key).is_some())
         } else {
@@ -138,7 +172,12 @@ impl StorageManager {
         }
     }
 
-    pub async fn set_local_storage(&mut self, origin: &str, key: &str, value: &str) -> Result<(), StorageError> {
+    pub async fn set_local_storage(
+        &mut self,
+        origin: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), StorageError> {
         let storage = self.local_storage.entry(origin.to_string()).or_default();
         storage.insert(key.to_string(), value.to_string());
         self.persist_local_storage(origin).await?;
@@ -149,7 +188,11 @@ impl StorageManager {
         self.local_storage.get(origin)?.get(key).cloned()
     }
 
-    pub async fn remove_local_storage(&mut self, origin: &str, key: &str) -> Result<(), StorageError> {
+    pub async fn remove_local_storage(
+        &mut self,
+        origin: &str,
+        key: &str,
+    ) -> Result<(), StorageError> {
         if let Some(storage) = self.local_storage.get_mut(origin) {
             storage.remove(key);
             self.persist_local_storage(origin).await?;
@@ -159,15 +202,23 @@ impl StorageManager {
 
     pub async fn clear_local_storage(&mut self, origin: &str) -> Result<(), StorageError> {
         self.local_storage.remove(origin);
-        let storage_file = self.storage_root.join(format!("{}_localStorage.json", origin));
+        let storage_file = self
+            .storage_root
+            .join(format!("{}_localStorage.json", origin));
         if storage_file.exists() {
-            fs::remove_file(storage_file).await
+            fs::remove_file(storage_file)
+                .await
                 .map_err(|e| StorageError::IoError(e.to_string()))?;
         }
         Ok(())
     }
 
-    pub async fn set_session_storage(&mut self, origin: &str, key: &str, value: &str) -> Result<(), StorageError> {
+    pub async fn set_session_storage(
+        &mut self,
+        origin: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), StorageError> {
         let storage = self.session_storage.entry(origin.to_string()).or_default();
         storage.insert(key.to_string(), value.to_string());
         Ok(())
@@ -178,7 +229,9 @@ impl StorageManager {
     }
 
     pub async fn clear_app_storage(&mut self, app_id: &str) -> Result<(), StorageError> {
-        let dbs_to_remove: Vec<String> = self.databases.keys()
+        let dbs_to_remove: Vec<String> = self
+            .databases
+            .keys()
             .filter(|key| key.contains(&format!("app_{}", app_id)))
             .cloned()
             .collect();
@@ -223,29 +276,35 @@ impl StorageManager {
 
     async fn persist_local_storage(&self, origin: &str) -> Result<(), StorageError> {
         if let Some(data) = self.local_storage.get(origin) {
-            let storage_file = self.storage_root.join(format!("{}_localStorage.json", origin));
+            let storage_file = self
+                .storage_root
+                .join(format!("{}_localStorage.json", origin));
             let json_data = serde_json::to_string_pretty(data)
                 .map_err(|e| StorageError::SerializationError(e.to_string()))?;
-            
-            fs::write(storage_file, json_data).await
+
+            fs::write(storage_file, json_data)
+                .await
                 .map_err(|e| StorageError::IoError(e.to_string()))?;
         }
         Ok(())
     }
 
     pub async fn load_persistent_data(&mut self, origin: &str) -> Result<(), StorageError> {
-        let storage_file = self.storage_root.join(format!("{}_localStorage.json", origin));
-        
+        let storage_file = self
+            .storage_root
+            .join(format!("{}_localStorage.json", origin));
+
         if storage_file.exists() {
-            let content = fs::read_to_string(storage_file).await
+            let content = fs::read_to_string(storage_file)
+                .await
                 .map_err(|e| StorageError::IoError(e.to_string()))?;
-            
+
             let data: HashMap<String, String> = serde_json::from_str(&content)
                 .map_err(|e| StorageError::SerializationError(e.to_string()))?;
-            
+
             self.local_storage.insert(origin.to_string(), data);
         }
-        
+
         Ok(())
     }
 }

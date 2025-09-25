@@ -91,12 +91,13 @@ impl Texture {
                 })?;
         }
 
-        let image_view = Self::create_image_view(&device, image, format, mip_levels).inspect_err(|_e| {
-            unsafe { device.destroy_image(image, None) };
-        })?;
+        let image_view =
+            Self::create_image_view(&device, image, format, mip_levels).inspect_err(|_e| {
+                unsafe { device.destroy_image(image, None) };
+            })?;
 
         let sampler = Self::create_sampler(&device, mip_levels).inspect_err(|_e| {
-            unsafe { 
+            unsafe {
                 device.destroy_image_view(image_view, None);
                 device.destroy_image(image, None);
             };
@@ -128,7 +129,8 @@ impl Texture {
         }
 
         let usage = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
-        let mut texture = Self::new_with_mips(device, allocator, width, height, format, usage, Some(1))?;
+        let mut texture =
+            Self::new_with_mips(device, allocator, width, height, format, usage, Some(1))?;
 
         unsafe {
             texture.device.destroy_image_view(texture.image_view, None);
@@ -171,7 +173,9 @@ impl Texture {
         image: vk::Image,
         format: vk::Format,
     ) -> Result<vk::ImageView, GpuError> {
-        let aspect_mask = if format == vk::Format::D32_SFLOAT_S8_UINT || format == vk::Format::D24_UNORM_S8_UINT {
+        let aspect_mask = if format == vk::Format::D32_SFLOAT_S8_UINT
+            || format == vk::Format::D24_UNORM_S8_UINT
+        {
             vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
         } else {
             vk::ImageAspectFlags::DEPTH
@@ -271,7 +275,9 @@ impl Texture {
 
         let aspect_mask = if Self::is_depth_format(self.format) {
             let mut mask = vk::ImageAspectFlags::DEPTH;
-            if self.format == vk::Format::D32_SFLOAT_S8_UINT || self.format == vk::Format::D24_UNORM_S8_UINT {
+            if self.format == vk::Format::D32_SFLOAT_S8_UINT
+                || self.format == vk::Format::D24_UNORM_S8_UINT
+            {
                 mask |= vk::ImageAspectFlags::STENCIL;
             }
             mask
@@ -312,7 +318,8 @@ impl Texture {
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
                 vk::AccessFlags::empty(),
-                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             ),
             (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::TRANSFER_SRC_OPTIMAL) => (
                 vk::PipelineStageFlags::TRANSFER,
@@ -344,7 +351,11 @@ impl Texture {
         Ok(())
     }
 
-    pub fn copy_from_buffer(&self, cmd: vk::CommandBuffer, buffer: vk::Buffer) -> Result<(), GpuError> {
+    pub fn copy_from_buffer(
+        &self,
+        cmd: vk::CommandBuffer,
+        buffer: vk::Buffer,
+    ) -> Result<(), GpuError> {
         self.copy_from_buffer_with_offset(cmd, buffer, 0, 0)
     }
 
@@ -595,10 +606,12 @@ impl Texture {
         })
     }
 
-    pub fn get_allocation_info(&self) -> Option<(vk::DeviceMemory, vk::DeviceSize, vk::DeviceSize)> {
-        self.allocation.as_ref().map(|alloc| unsafe {
-            (alloc.memory(), alloc.offset(), alloc.size())
-        })
+    pub fn get_allocation_info(
+        &self,
+    ) -> Option<(vk::DeviceMemory, vk::DeviceSize, vk::DeviceSize)> {
+        self.allocation
+            .as_ref()
+            .map(|alloc| unsafe { (alloc.memory(), alloc.offset(), alloc.size()) })
     }
 
     pub fn is_depth_texture(&self) -> bool {
@@ -606,12 +619,13 @@ impl Texture {
     }
 
     fn is_depth_format(format: vk::Format) -> bool {
-        matches!(format, 
-            vk::Format::D16_UNORM |
-            vk::Format::D32_SFLOAT |
-            vk::Format::D16_UNORM_S8_UINT |
-            vk::Format::D24_UNORM_S8_UINT |
-            vk::Format::D32_SFLOAT_S8_UINT
+        matches!(
+            format,
+            vk::Format::D16_UNORM
+                | vk::Format::D32_SFLOAT
+                | vk::Format::D16_UNORM_S8_UINT
+                | vk::Format::D24_UNORM_S8_UINT
+                | vk::Format::D32_SFLOAT_S8_UINT
         )
     }
 
@@ -632,14 +646,30 @@ impl Texture {
             vk::Format::R8G8_UNORM | vk::Format::R8G8_UINT | vk::Format::R8G8_SINT => 2,
             vk::Format::R8G8B8_UNORM | vk::Format::R8G8B8_UINT | vk::Format::R8G8B8_SINT => 3,
             vk::Format::R8G8B8A8_UNORM | vk::Format::R8G8B8A8_UINT | vk::Format::R8G8B8A8_SINT => 4,
-            vk::Format::R16_UNORM | vk::Format::R16_UINT | vk::Format::R16_SINT | vk::Format::R16_SFLOAT => 2,
-            vk::Format::R16G16_UNORM | vk::Format::R16G16_UINT | vk::Format::R16G16_SINT | vk::Format::R16G16_SFLOAT => 4,
-            vk::Format::R16G16B16_UNORM | vk::Format::R16G16B16_UINT | vk::Format::R16G16B16_SINT | vk::Format::R16G16B16_SFLOAT => 6,
-            vk::Format::R16G16B16A16_UNORM | vk::Format::R16G16B16A16_UINT | vk::Format::R16G16B16A16_SINT | vk::Format::R16G16B16A16_SFLOAT => 8,
+            vk::Format::R16_UNORM
+            | vk::Format::R16_UINT
+            | vk::Format::R16_SINT
+            | vk::Format::R16_SFLOAT => 2,
+            vk::Format::R16G16_UNORM
+            | vk::Format::R16G16_UINT
+            | vk::Format::R16G16_SINT
+            | vk::Format::R16G16_SFLOAT => 4,
+            vk::Format::R16G16B16_UNORM
+            | vk::Format::R16G16B16_UINT
+            | vk::Format::R16G16B16_SINT
+            | vk::Format::R16G16B16_SFLOAT => 6,
+            vk::Format::R16G16B16A16_UNORM
+            | vk::Format::R16G16B16A16_UINT
+            | vk::Format::R16G16B16A16_SINT
+            | vk::Format::R16G16B16A16_SFLOAT => 8,
             vk::Format::R32_UINT | vk::Format::R32_SINT | vk::Format::R32_SFLOAT => 4,
             vk::Format::R32G32_UINT | vk::Format::R32G32_SINT | vk::Format::R32G32_SFLOAT => 8,
-            vk::Format::R32G32B32_UINT | vk::Format::R32G32B32_SINT | vk::Format::R32G32B32_SFLOAT => 12,
-            vk::Format::R32G32B32A32_UINT | vk::Format::R32G32B32A32_SINT | vk::Format::R32G32B32A32_SFLOAT => 16,
+            vk::Format::R32G32B32_UINT
+            | vk::Format::R32G32B32_SINT
+            | vk::Format::R32G32B32_SFLOAT => 12,
+            vk::Format::R32G32B32A32_UINT
+            | vk::Format::R32G32B32A32_SINT
+            | vk::Format::R32G32B32A32_SFLOAT => 16,
             vk::Format::D16_UNORM => 2,
             vk::Format::D32_SFLOAT => 4,
             vk::Format::D24_UNORM_S8_UINT | vk::Format::D32_SFLOAT_S8_UINT => 4,

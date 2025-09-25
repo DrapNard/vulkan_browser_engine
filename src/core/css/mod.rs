@@ -251,7 +251,7 @@ impl CSSUnit {
             "vw" => Some(CSSUnit::Vw),
             "vmin" => Some(CSSUnit::Vmin),
             "vmax" => Some(CSSUnit::Vmax),
-            "%"  => Some(CSSUnit::Percent),
+            "%" => Some(CSSUnit::Percent),
             "pt" => Some(CSSUnit::Pt),
             "pc" => Some(CSSUnit::Pc),
             "in" => Some(CSSUnit::In),
@@ -259,7 +259,7 @@ impl CSSUnit {
             "mm" => Some(CSSUnit::Mm),
             "ex" => Some(CSSUnit::Ex),
             "ch" => Some(CSSUnit::Ch),
-            "q"  => Some(CSSUnit::Q),
+            "q" => Some(CSSUnit::Q),
             "deg" => Some(CSSUnit::Deg),
             "rad" => Some(CSSUnit::Rad),
             "grad" => Some(CSSUnit::Grad),
@@ -275,7 +275,6 @@ impl CSSUnit {
             _ => None,
         }
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

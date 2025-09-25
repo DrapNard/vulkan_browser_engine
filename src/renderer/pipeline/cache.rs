@@ -55,15 +55,18 @@ impl PipelineCache {
     }
 
     pub async fn get_rect_pipeline(&self) -> Result<Pipeline, PipelineError> {
-        self.get_or_create_graphics_pipeline(PipelineType::Rect).await
+        self.get_or_create_graphics_pipeline(PipelineType::Rect)
+            .await
     }
 
     pub async fn get_image_pipeline(&self) -> Result<Pipeline, PipelineError> {
-        self.get_or_create_graphics_pipeline(PipelineType::Image).await
+        self.get_or_create_graphics_pipeline(PipelineType::Image)
+            .await
     }
 
     pub async fn get_text_pipeline(&self) -> Result<Pipeline, PipelineError> {
-        self.get_or_create_graphics_pipeline(PipelineType::Text).await
+        self.get_or_create_graphics_pipeline(PipelineType::Text)
+            .await
     }
 
     pub async fn get_compute_pipeline(&self, name: &str) -> Result<Pipeline, PipelineError> {
@@ -84,22 +87,28 @@ impl PipelineCache {
         self.create_compute_pipeline(name).await
     }
 
-    async fn get_or_create_graphics_pipeline(&self, pipeline_type: PipelineType) -> Result<Pipeline, PipelineError> {
+    async fn get_or_create_graphics_pipeline(
+        &self,
+        pipeline_type: PipelineType,
+    ) -> Result<Pipeline, PipelineError> {
         let spec = Self::get_pipeline_spec(pipeline_type);
-        
+
         {
             let manager = self.manager.read().await;
             if let Some(existing) = manager.get_pipeline(spec.name) {
                 let vertex_hash = self.get_cached_shader_hash(spec.vertex_shader).await;
                 let fragment_hash = self.get_cached_shader_hash(spec.fragment_shader).await;
                 let combined_hash = self.combine_hashes(&[vertex_hash, fragment_hash]);
-                
+
                 return Ok(Pipeline {
                     pipeline: existing.get_pipeline(),
                     layout: existing.get_layout(),
                     bind_point: existing.get_bind_point(),
                     hash: combined_hash,
-                    shader_stages: vec![vk::ShaderStageFlags::VERTEX, vk::ShaderStageFlags::FRAGMENT],
+                    shader_stages: vec![
+                        vk::ShaderStageFlags::VERTEX,
+                        vk::ShaderStageFlags::FRAGMENT,
+                    ],
                 });
             }
         }
@@ -107,7 +116,10 @@ impl PipelineCache {
         self.create_graphics_pipeline(spec).await
     }
 
-    async fn create_graphics_pipeline(&self, spec: PipelineSpec) -> Result<Pipeline, PipelineError> {
+    async fn create_graphics_pipeline(
+        &self,
+        spec: PipelineSpec,
+    ) -> Result<Pipeline, PipelineError> {
         let vertex_shader = self.load_shader(spec.vertex_shader).await?;
         let fragment_shader = self.load_shader(spec.fragment_shader).await?;
         let vertex_input_info = Self::create_vertex_input_info(spec.vertex_type);
@@ -171,7 +183,7 @@ impl PipelineCache {
 
     async fn load_shader(&self, name: &str) -> Result<Vec<u8>, PipelineError> {
         let shader_path = format!("resources/shaders/{}.spv", name);
-        
+
         {
             let cache = self.shader_cache.read().await;
             if let Some(shader_data) = cache.get(name) {
@@ -181,11 +193,16 @@ impl PipelineCache {
             }
         }
 
-        let metadata = tokio::fs::metadata(&shader_path).await
-            .map_err(|e| PipelineError::ShaderCompilationError(format!("Shader metadata error for {}: {}", name, e)))?;
-        
-        let shader_content = tokio::fs::read(&shader_path).await
-            .map_err(|e| PipelineError::ShaderCompilationError(format!("Failed to read shader {}: {}", name, e)))?;
+        let metadata = tokio::fs::metadata(&shader_path).await.map_err(|e| {
+            PipelineError::ShaderCompilationError(format!(
+                "Shader metadata error for {}: {}",
+                name, e
+            ))
+        })?;
+
+        let shader_content = tokio::fs::read(&shader_path).await.map_err(|e| {
+            PipelineError::ShaderCompilationError(format!("Failed to read shader {}: {}", name, e))
+        })?;
 
         let shader_hash = self.calculate_content_hash(&shader_content);
         let shader_data = ShaderData {
@@ -207,14 +224,19 @@ impl PipelineCache {
         cache.get(name).map(|data| data.hash).unwrap_or(0)
     }
 
-    async fn is_shader_current(&self, path: &str, cached_data: &ShaderData) -> Result<bool, PipelineError> {
+    async fn is_shader_current(
+        &self,
+        path: &str,
+        cached_data: &ShaderData,
+    ) -> Result<bool, PipelineError> {
         if !self.hot_reload_enabled {
             return Ok(true);
         }
 
-        let metadata = tokio::fs::metadata(path).await
-            .map_err(|e| PipelineError::ShaderCompilationError(format!("Timestamp check failed: {}", e)))?;
-        
+        let metadata = tokio::fs::metadata(path).await.map_err(|e| {
+            PipelineError::ShaderCompilationError(format!("Timestamp check failed: {}", e))
+        })?;
+
         Ok(metadata.modified().unwrap_or(std::time::UNIX_EPOCH) <= cached_data.last_modified)
     }
 
@@ -328,11 +350,11 @@ impl PipelineCache {
 
         for (pipeline_name, shader_names) in &pipeline_specs {
             let mut needs_reload = false;
-            
+
             for shader_name in shader_names {
                 let shader_path = format!("resources/shaders/{}.spv", shader_name);
                 let cache = self.shader_cache.read().await;
-                
+
                 if let Some(cached_data) = cache.get(*shader_name) {
                     if !self.is_shader_current(&shader_path, cached_data).await? {
                         needs_reload = true;
@@ -356,7 +378,10 @@ impl PipelineCache {
         {
             let mut shader_cache = self.shader_cache.write().await;
             for pipeline_name in &modified_pipelines {
-                if let Some((_, shader_names)) = pipeline_specs.iter().find(|(name, _)| name == pipeline_name) {
+                if let Some((_, shader_names)) = pipeline_specs
+                    .iter()
+                    .find(|(name, _)| name == pipeline_name)
+                {
                     for shader_name in shader_names {
                         shader_cache.remove(*shader_name);
                     }
@@ -365,17 +390,28 @@ impl PipelineCache {
         }
 
         let mut manager = self.manager.write().await;
-        
+
         for pipeline_name in &modified_pipelines {
-            if let Some((_, shader_names)) = pipeline_specs.iter().find(|(name, _)| name == pipeline_name) {
+            if let Some((_, shader_names)) = pipeline_specs
+                .iter()
+                .find(|(name, _)| name == pipeline_name)
+            {
                 let vertex_shader = self.load_shader(shader_names[0]).await?;
                 let fragment_shader = self.load_shader(shader_names[1]).await?;
-                
-                manager.reload_pipeline(pipeline_name, Some(&vertex_shader), Some(&fragment_shader))?;
+
+                manager.reload_pipeline(
+                    pipeline_name,
+                    Some(&vertex_shader),
+                    Some(&fragment_shader),
+                )?;
             }
         }
 
-        log::info!("Hot reloaded {} pipelines: {:?}", modified_pipelines.len(), modified_pipelines);
+        log::info!(
+            "Hot reloaded {} pipelines: {:?}",
+            modified_pipelines.len(),
+            modified_pipelines
+        );
         Ok(())
     }
 }

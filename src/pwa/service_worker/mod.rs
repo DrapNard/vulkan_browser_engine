@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 pub struct ServiceWorkerManager {
     workers: Arc<RwLock<HashMap<String, ServiceWorker>>>,
@@ -39,16 +39,20 @@ impl ServiceWorkerManager {
 
     pub async fn with_config(config: ServiceWorkerConfig) -> Result<Self, ServiceWorkerError> {
         let runtime = ServiceWorkerRuntime::with_config(config).await?;
-        
+
         Ok(Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
             runtime,
         })
     }
 
-    pub async fn register(&self, script_url: &str, scope: &str) -> Result<String, ServiceWorkerError> {
+    pub async fn register(
+        &self,
+        script_url: &str,
+        scope: &str,
+    ) -> Result<String, ServiceWorkerError> {
         let worker_id = self.generate_worker_id(script_url, scope);
-        
+
         let worker = ServiceWorker {
             id: worker_id.clone(),
             script_url: script_url.to_string(),
@@ -62,12 +66,17 @@ impl ServiceWorkerManager {
 
         match self.runtime.install_worker(script_url, scope).await {
             Ok(runtime_worker_id) => {
-                self.update_worker_state(&worker_id, ServiceWorkerState::Installed).await;
-                
+                self.update_worker_state(&worker_id, ServiceWorkerState::Installed)
+                    .await;
+
                 match self.runtime.activate_worker(&runtime_worker_id).await {
                     Ok(()) => {
-                        self.update_worker_state(&worker_id, ServiceWorkerState::Activated).await;
-                        info!("Service Worker registered successfully: {} ({})", script_url, worker_id);
+                        self.update_worker_state(&worker_id, ServiceWorkerState::Activated)
+                            .await;
+                        info!(
+                            "Service Worker registered successfully: {} ({})",
+                            script_url, worker_id
+                        );
                         Ok(worker_id)
                     }
                     Err(e) => {
@@ -86,7 +95,8 @@ impl ServiceWorkerManager {
     }
 
     pub async fn unregister(&self, worker_id: &str) -> Result<(), ServiceWorkerError> {
-        self.update_worker_state(worker_id, ServiceWorkerState::Redundant).await;
+        self.update_worker_state(worker_id, ServiceWorkerState::Redundant)
+            .await;
         self.runtime.terminate_worker(worker_id).await?;
         self.remove_worker(worker_id).await;
         info!("Service Worker unregistered: {}", worker_id);
@@ -94,13 +104,15 @@ impl ServiceWorkerManager {
     }
 
     pub async fn update_worker(&self, worker_id: &str) -> Result<(), ServiceWorkerError> {
-        let worker_info = self.get_worker_info(worker_id).await
+        let worker_info = self
+            .get_worker_info(worker_id)
+            .await
             .ok_or_else(|| ServiceWorkerError::WorkerNotFound(worker_id.to_string()))?;
 
         let (script_url, scope) = worker_info;
-        
+
         self.runtime.terminate_worker(worker_id).await?;
-        
+
         let new_worker_id = self.runtime.install_worker(&script_url, &scope).await?;
         self.runtime.activate_worker(&new_worker_id).await?;
 
@@ -112,12 +124,16 @@ impl ServiceWorkerManager {
 
     pub async fn get_registration(&self, scope: &str) -> Option<ServiceWorker> {
         let workers = self.workers.read().await;
-        workers.values()
+        workers
+            .values()
             .find(|worker| worker.scope == scope && worker.state == ServiceWorkerState::Activated)
             .cloned()
     }
 
-    pub async fn handle_fetch(&self, request: &crate::pwa::FetchRequest) -> Result<Option<crate::pwa::FetchResponse>, ServiceWorkerError> {
+    pub async fn handle_fetch(
+        &self,
+        request: &crate::pwa::FetchRequest,
+    ) -> Result<Option<crate::pwa::FetchResponse>, ServiceWorkerError> {
         let matching_worker_id = self.find_matching_worker(&request.url).await;
 
         if let Some(worker_id) = matching_worker_id {
@@ -135,7 +151,7 @@ impl ServiceWorkerManager {
     pub async fn cleanup_redundant_workers(&self) -> Result<usize, ServiceWorkerError> {
         let redundant_worker_ids = self.collect_redundant_workers().await;
         let cleanup_count = redundant_worker_ids.len();
-        
+
         for worker_id in redundant_worker_ids {
             if let Err(e) = self.unregister(&worker_id).await {
                 warn!("Failed to cleanup redundant worker {}: {}", worker_id, e);
@@ -143,25 +159,39 @@ impl ServiceWorkerManager {
         }
 
         let runtime_cleanup_count = self.runtime.cleanup_inactive_workers().await;
-        
-        info!("Cleaned up {} redundant workers, {} inactive runtime workers", 
-              cleanup_count, runtime_cleanup_count);
-        
+
+        info!(
+            "Cleaned up {} redundant workers, {} inactive runtime workers",
+            cleanup_count, runtime_cleanup_count
+        );
+
         Ok(cleanup_count + runtime_cleanup_count)
     }
 
-    pub async fn get_worker_stats(&self, worker_id: &str) -> Result<(ServiceWorker, crate::pwa::service_worker::runtime::ExecutionStats), ServiceWorkerError> {
-        let worker = self.get_worker_by_id(worker_id).await
+    pub async fn get_worker_stats(
+        &self,
+        worker_id: &str,
+    ) -> Result<
+        (
+            ServiceWorker,
+            crate::pwa::service_worker::runtime::ExecutionStats,
+        ),
+        ServiceWorkerError,
+    > {
+        let worker = self
+            .get_worker_by_id(worker_id)
+            .await
             .ok_or_else(|| ServiceWorkerError::WorkerNotFound(worker_id.to_string()))?;
 
         let stats = self.runtime.get_worker_stats(worker_id).await?;
-        
+
         Ok((worker, stats))
     }
 
     pub async fn list_active_workers(&self) -> Vec<String> {
         let workers = self.workers.read().await;
-        workers.values()
+        workers
+            .values()
             .filter(|w| w.state == ServiceWorkerState::Activated)
             .map(|w| w.id.clone())
             .collect()
@@ -169,7 +199,8 @@ impl ServiceWorkerManager {
 
     pub async fn get_worker_by_scope(&self, scope: &str) -> Option<ServiceWorker> {
         let workers = self.workers.read().await;
-        workers.values()
+        workers
+            .values()
             .find(|worker| worker.scope == scope)
             .cloned()
     }
@@ -190,9 +221,10 @@ impl ServiceWorkerManager {
         }
 
         if !errors.is_empty() {
-            return Err(ServiceWorkerError::ExecutionError(
-                format!("Failed to update some workers: {}", errors.join(", "))
-            ));
+            return Err(ServiceWorkerError::ExecutionError(format!(
+                "Failed to update some workers: {}",
+                errors.join(", ")
+            )));
         }
 
         Ok(updated_workers)
@@ -224,13 +256,15 @@ impl ServiceWorkerManager {
     }
 
     async fn cleanup_failed_worker(&self, worker_id: &str) {
-        self.update_worker_state(worker_id, ServiceWorkerState::Redundant).await;
+        self.update_worker_state(worker_id, ServiceWorkerState::Redundant)
+            .await;
         let _ = self.runtime.terminate_worker(worker_id).await;
     }
 
     async fn get_worker_info(&self, worker_id: &str) -> Option<(String, String)> {
         let workers = self.workers.read().await;
-        workers.get(worker_id)
+        workers
+            .get(worker_id)
             .map(|w| (w.script_url.clone(), w.scope.clone()))
     }
 
@@ -241,17 +275,18 @@ impl ServiceWorkerManager {
 
     async fn find_matching_worker(&self, url: &str) -> Option<String> {
         let workers = self.workers.read().await;
-        workers.values()
+        workers
+            .values()
             .find(|worker| {
-                worker.state == ServiceWorkerState::Activated 
-                && url.starts_with(&worker.scope)
+                worker.state == ServiceWorkerState::Activated && url.starts_with(&worker.scope)
             })
             .map(|worker| worker.id.clone())
     }
 
     async fn collect_redundant_workers(&self) -> Vec<String> {
         let workers = self.workers.read().await;
-        workers.iter()
+        workers
+            .iter()
             .filter_map(|(id, worker)| {
                 if worker.state == ServiceWorkerState::Redundant {
                     Some(id.clone())
@@ -270,7 +305,7 @@ impl ServiceWorkerManager {
     fn generate_worker_id(&self, script_url: &str, scope: &str) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         script_url.hash(&mut hasher);
         scope.hash(&mut hasher);
@@ -279,7 +314,7 @@ impl ServiceWorkerManager {
             .unwrap_or_default()
             .as_nanos()
             .hash(&mut hasher);
-        
+
         format!("sw_{:x}", hasher.finish())
     }
 }

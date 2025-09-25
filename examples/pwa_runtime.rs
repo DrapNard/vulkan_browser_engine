@@ -1,4 +1,4 @@
-use vulkan_browser_engine::pwa::{PwaRuntime, manifest::Manifest};
+use vulkan_browser_engine::pwa::{manifest::Manifest, PwaRuntime};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,7 +11,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Installed PWA with ID: {}", app_id);
 
     // register_service_worker takes (&str, Option<&str>)
-    let worker_id = runtime.register_service_worker("app/sw.js", Some("/")).await?;
+    let worker_id = runtime
+        .register_service_worker("app/sw.js", Some("/"))
+        .await?;
     println!("Registered Service Worker: {}", worker_id);
 
     let usage = runtime.get_total_storage_usage().await?;

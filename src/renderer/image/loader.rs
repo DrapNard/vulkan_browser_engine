@@ -1,9 +1,9 @@
 use super::ImageError;
 use crate::renderer::gpu::{GpuContext, Texture};
 use ash::vk;
+use base64::engine::Engine;
 use image::{DynamicImage, ImageFormat};
-use std::io::Cursor;
-use base64::engine::Engine; // Import the trait for decode method
+use std::io::Cursor; // Import the trait for decode method
 
 pub struct ImageLoader {
     supported_formats: Vec<ImageFormat>,
@@ -23,13 +23,21 @@ impl ImageLoader {
         }
     }
 
-    pub async fn load_image(&self, url: &str, gpu_context: &GpuContext) -> Result<Texture, ImageError> {
+    pub async fn load_image(
+        &self,
+        url: &str,
+        gpu_context: &GpuContext,
+    ) -> Result<Texture, ImageError> {
         let image_data = self.fetch_image_data(url).await?;
         let image = self.decode_image(&image_data)?;
         self.create_texture_with_context(image, gpu_context)
     }
 
-    pub async fn load_image_from_bytes(&self, data: &[u8], gpu_context: &GpuContext) -> Result<Texture, ImageError> {
+    pub async fn load_image_from_bytes(
+        &self,
+        data: &[u8],
+        gpu_context: &GpuContext,
+    ) -> Result<Texture, ImageError> {
         let image = self.decode_image(data)?;
         self.create_texture_with_context(image, gpu_context)
     }
@@ -90,16 +98,15 @@ impl ImageLoader {
     }
 
     fn decode_image(&self, data: &[u8]) -> Result<DynamicImage, ImageError> {
-        let format = image::guess_format(data)
-            .map_err(|e| ImageError::DecodeError(e.to_string()))?;
+        let format =
+            image::guess_format(data).map_err(|e| ImageError::DecodeError(e.to_string()))?;
 
         if !self.supported_formats.contains(&format) {
             return Err(ImageError::UnsupportedFormat(format!("{:?}", format)));
         }
 
         let cursor = Cursor::new(data);
-        image::load(cursor, format)
-            .map_err(|e| ImageError::DecodeError(e.to_string()))
+        image::load(cursor, format).map_err(|e| ImageError::DecodeError(e.to_string()))
     }
 
     pub fn create_texture_with_context(
@@ -130,11 +137,14 @@ impl ImageLoader {
         let cmd = gpu_context.allocate_command_buffer()?;
 
         unsafe {
-            gpu_context.get_device().begin_command_buffer(
-                cmd,
-                &vk::CommandBufferBeginInfo::builder()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            ).map_err(crate::renderer::gpu::GpuError::VulkanError)?;
+            gpu_context
+                .get_device()
+                .begin_command_buffer(
+                    cmd,
+                    &vk::CommandBufferBeginInfo::builder()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )
+                .map_err(crate::renderer::gpu::GpuError::VulkanError)?;
         }
 
         texture.transition_layout(
@@ -154,7 +164,9 @@ impl ImageLoader {
         texture.generate_mipmaps(cmd)?;
 
         unsafe {
-            gpu_context.get_device().end_command_buffer(cmd)
+            gpu_context
+                .get_device()
+                .end_command_buffer(cmd)
                 .map_err(crate::renderer::gpu::GpuError::VulkanError)?;
         }
 
@@ -167,23 +179,33 @@ impl ImageLoader {
     pub fn create_placeholder_texture(&self, width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
         let pixel_count = (width * height) as usize;
         let mut data = Vec::with_capacity(pixel_count * 4);
-        
+
         for _ in 0..pixel_count {
             data.extend_from_slice(&color);
         }
-        
+
         data
     }
 
-    pub fn create_placeholder_texture_with_context(&self, width: u32, height: u32, color: [u8; 4], gpu_context: &GpuContext) -> Result<Texture, ImageError> {
+    pub fn create_placeholder_texture_with_context(
+        &self,
+        width: u32,
+        height: u32,
+        color: [u8; 4],
+        gpu_context: &GpuContext,
+    ) -> Result<Texture, ImageError> {
         let data = self.create_placeholder_texture(width, height, color);
-        let image = image::RgbaImage::from_raw(width, height, data)
-            .ok_or_else(|| ImageError::LoadError("Failed to create placeholder image".to_string()))?;
+        let image = image::RgbaImage::from_raw(width, height, data).ok_or_else(|| {
+            ImageError::LoadError("Failed to create placeholder image".to_string())
+        })?;
         let dynamic_image = DynamicImage::ImageRgba8(image);
         self.create_texture_with_context(dynamic_image, gpu_context)
     }
 
-    pub async fn create_texture_atlas(&self, images: &[DynamicImage]) -> Result<DynamicImage, ImageError> {
+    pub async fn create_texture_atlas(
+        &self,
+        images: &[DynamicImage],
+    ) -> Result<DynamicImage, ImageError> {
         if images.is_empty() {
             return Err(ImageError::LoadError("No images provided".to_string()));
         }
@@ -203,7 +225,11 @@ impl ImageLoader {
         Ok(DynamicImage::ImageRgba8(atlas))
     }
 
-    pub async fn create_texture_atlas_with_context(&self, images: &[DynamicImage], gpu_context: &GpuContext) -> Result<Texture, ImageError> {
+    pub async fn create_texture_atlas_with_context(
+        &self,
+        images: &[DynamicImage],
+        gpu_context: &GpuContext,
+    ) -> Result<Texture, ImageError> {
         let atlas_image = self.create_texture_atlas(images).await?;
         self.create_texture_with_context(atlas_image, gpu_context)
     }

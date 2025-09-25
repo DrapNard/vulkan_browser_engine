@@ -30,7 +30,7 @@ impl V8Runtime {
         Self::ensure_v8_initialized()?;
 
         let mut isolate = v8::Isolate::new(v8::CreateParams::default());
-        
+
         let context = {
             let scope = &mut v8::HandleScope::new(&mut isolate);
             let context = v8::Context::new(scope);
@@ -48,19 +48,17 @@ impl V8Runtime {
 
     fn ensure_v8_initialized() -> Result<(), V8Error> {
         let mut init_result = Ok(());
-        
-        INIT_V8.call_once(|| {
-            match Self::initialize_v8() {
-                Ok(_) => {
-                    if let Ok(mut state) = V8_STATE.lock() {
-                        *state = V8State::Initialized;
-                    } else {
-                        init_result = Err(V8Error::InitializationFailed);
-                    }
-                },
-                Err(e) => {
-                    init_result = Err(e);
+
+        INIT_V8.call_once(|| match Self::initialize_v8() {
+            Ok(_) => {
+                if let Ok(mut state) = V8_STATE.lock() {
+                    *state = V8State::Initialized;
+                } else {
+                    init_result = Err(V8Error::InitializationFailed);
                 }
+            }
+            Err(e) => {
+                init_result = Err(e);
             }
         });
 
@@ -97,7 +95,8 @@ impl V8Runtime {
     }
 
     pub fn is_v8_initialized() -> bool {
-        V8_STATE.lock()
+        V8_STATE
+            .lock()
             .map(|state| *state == V8State::Initialized)
             .unwrap_or(false)
     }
@@ -114,14 +113,14 @@ impl V8Runtime {
 
     pub fn execute(&mut self, source: &str) -> Result<serde_json::Value, V8Error> {
         self.with_context_scope(|scope| {
-            let code = v8::String::new(scope, source)
-                .ok_or(V8Error::InvalidSource)?;
+            let code = v8::String::new(scope, source).ok_or(V8Error::InvalidSource)?;
 
             let mut try_catch = v8::TryCatch::new(scope);
             let script = v8::Script::compile(&mut try_catch, code, None)
                 .ok_or_else(|| Self::extract_exception(&mut try_catch))?;
 
-            let result = script.run(&mut try_catch)
+            let result = script
+                .run(&mut try_catch)
                 .ok_or_else(|| Self::extract_exception(&mut try_catch))?;
 
             Self::value_to_json(&mut try_catch, result)
@@ -142,8 +141,8 @@ impl V8Runtime {
     }
 
     fn value_to_json(
-        scope: &mut HandleScope, 
-        value: Local<v8::Value>
+        scope: &mut HandleScope,
+        value: Local<v8::Value>,
     ) -> Result<serde_json::Value, V8Error> {
         if value.is_null() || value.is_undefined() {
             Ok(serde_json::Value::Null)
@@ -152,12 +151,13 @@ impl V8Runtime {
         } else if value.is_number() {
             let num = value.number_value(scope).unwrap_or(0.0);
             Ok(serde_json::Value::Number(
-                serde_json::Number::from_f64(num)
-                    .unwrap_or_else(|| serde_json::Number::from(0))
+                serde_json::Number::from_f64(num).unwrap_or_else(|| serde_json::Number::from(0)),
             ))
         } else if value.is_string() {
             let string = value.to_string(scope).unwrap();
-            Ok(serde_json::Value::String(string.to_rust_string_lossy(scope)))
+            Ok(serde_json::Value::String(
+                string.to_rust_string_lossy(scope),
+            ))
         } else if value.is_array() {
             let array = v8::Local::<v8::Array>::try_from(value).unwrap();
             let mut result = Vec::with_capacity(array.length() as usize);
@@ -170,19 +170,15 @@ impl V8Runtime {
         } else if value.is_object() {
             let object = v8::Local::<v8::Object>::try_from(value).unwrap();
             let mut result = serde_json::Map::new();
-            if let Some(property_names) = object.get_own_property_names(
-                scope, 
-                v8::GetPropertyNamesArgs::default()
-            ) {
+            if let Some(property_names) =
+                object.get_own_property_names(scope, v8::GetPropertyNamesArgs::default())
+            {
                 for i in 0..property_names.length() {
                     if let Some(key) = property_names.get_index(scope, i) {
                         if let Some(key_str) = key.to_string(scope) {
                             let key_string = key_str.to_rust_string_lossy(scope);
                             if let Some(prop_value) = object.get(scope, key) {
-                                result.insert(
-                                    key_string, 
-                                    Self::value_to_json(scope, prop_value)?
-                                );
+                                result.insert(key_string, Self::value_to_json(scope, prop_value)?);
                             }
                         }
                     }
@@ -196,8 +192,7 @@ impl V8Runtime {
 
     pub fn bind_function(&mut self, name: &str) -> Result<(), V8Error> {
         self.with_context_scope(|scope| {
-            let function_name = v8::String::new(scope, name)
-                .ok_or(V8Error::InvalidFunctionName)?;
+            let function_name = v8::String::new(scope, name).ok_or(V8Error::InvalidFunctionName)?;
 
             let function_template = v8::FunctionTemplate::new(
                 scope,
@@ -206,7 +201,7 @@ impl V8Runtime {
                  mut rv: v8::ReturnValue| {
                     let undefined = v8::undefined(scope);
                     rv.set(undefined.into());
-                }
+                },
             );
 
             let function = function_template
@@ -225,8 +220,8 @@ impl V8Runtime {
     pub fn bind_console_log(&mut self) -> Result<(), V8Error> {
         self.with_context_scope(|scope| {
             let console_obj = v8::Object::new(scope);
-            let console_str = v8::String::new(scope, "console")
-                .ok_or(V8Error::InvalidFunctionName)?;
+            let console_str =
+                v8::String::new(scope, "console").ok_or(V8Error::InvalidFunctionName)?;
 
             let log_template = v8::FunctionTemplate::new(
                 scope,
@@ -242,21 +237,22 @@ impl V8Runtime {
                     }
                     let undefined = v8::undefined(scope);
                     rv.set(undefined.into());
-                }
+                },
             );
 
             let log_function = log_template
                 .get_function(scope)
                 .ok_or(V8Error::FunctionCreationFailed)?;
 
-            let log_str = v8::String::new(scope, "log")
-                .ok_or(V8Error::InvalidFunctionName)?;
+            let log_str = v8::String::new(scope, "log").ok_or(V8Error::InvalidFunctionName)?;
 
-            console_obj.set(scope, log_str.into(), log_function.into())
+            console_obj
+                .set(scope, log_str.into(), log_function.into())
                 .ok_or(V8Error::BindingFailed)?;
 
             let global = scope.get_current_context().global(scope);
-            global.set(scope, console_str.into(), console_obj.into())
+            global
+                .set(scope, console_str.into(), console_obj.into())
                 .ok_or(V8Error::BindingFailed)?;
 
             Ok(())
@@ -281,7 +277,7 @@ impl V8Runtime {
                         let undefined = v8::undefined(scope);
                         rv.set(undefined.into());
                     }
-                }
+                },
             );
 
             let multiply_template = v8::FunctionTemplate::new(
@@ -298,22 +294,25 @@ impl V8Runtime {
                         let undefined = v8::undefined(scope);
                         rv.set(undefined.into());
                     }
-                }
+                },
             );
 
-            let add_function = add_template.get_function(scope)
+            let add_function = add_template
+                .get_function(scope)
                 .ok_or(V8Error::FunctionCreationFailed)?;
-            let multiply_function = multiply_template.get_function(scope)
+            let multiply_function = multiply_template
+                .get_function(scope)
                 .ok_or(V8Error::FunctionCreationFailed)?;
 
-            let add_name = v8::String::new(scope, "add")
-                .ok_or(V8Error::InvalidFunctionName)?;
-            let multiply_name = v8::String::new(scope, "multiply")
-                .ok_or(V8Error::InvalidFunctionName)?;
+            let add_name = v8::String::new(scope, "add").ok_or(V8Error::InvalidFunctionName)?;
+            let multiply_name =
+                v8::String::new(scope, "multiply").ok_or(V8Error::InvalidFunctionName)?;
 
-            global.set(scope, add_name.into(), add_function.into())
+            global
+                .set(scope, add_name.into(), add_function.into())
                 .ok_or(V8Error::BindingFailed)?;
-            global.set(scope, multiply_name.into(), multiply_function.into())
+            global
+                .set(scope, multiply_name.into(), multiply_function.into())
                 .ok_or(V8Error::BindingFailed)?;
 
             Ok(())
@@ -336,8 +335,7 @@ impl V8Runtime {
 
     pub fn create_string(&mut self, content: &str) -> Result<v8::Global<v8::String>, V8Error> {
         self.with_context_scope(|scope| {
-            let string = v8::String::new(scope, content)
-                .ok_or(V8Error::TypeConversionError)?;
+            let string = v8::String::new(scope, content).ok_or(V8Error::TypeConversionError)?;
             Ok(v8::Global::new(scope, string))
         })
     }

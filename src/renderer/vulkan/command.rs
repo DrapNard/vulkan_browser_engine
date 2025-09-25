@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::collections::VecDeque;
-use ash::{Device, vk};
-use parking_lot::{Mutex, RwLock};
-use crossbeam::channel::{Sender, unbounded};
-use dashmap::DashMap;
-use smallvec::SmallVec;
-use thiserror::Error;
 use super::device::VulkanDevice;
+use ash::{vk, Device};
+use crossbeam::channel::{unbounded, Sender};
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
+use smallvec::SmallVec;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum CommandError {
@@ -50,17 +50,14 @@ struct CommandPool {
 }
 
 impl CommandPool {
-    fn new(
-        device: &Device,
-        queue_family: u32,
-        flags: vk::CommandPoolCreateFlags
-    ) -> Result<Self> {
+    fn new(device: &Device, queue_family: u32, flags: vk::CommandPoolCreateFlags) -> Result<Self> {
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(flags)
             .queue_family_index(queue_family);
 
         let pool = unsafe {
-            device.create_command_pool(&pool_info, None)
+            device
+                .create_command_pool(&pool_info, None)
                 .map_err(|e| CommandError::PoolCreation(e.to_string()))?
         };
 
@@ -73,7 +70,11 @@ impl CommandPool {
         })
     }
 
-    fn allocate_buffer(&mut self, device: &Device, level: vk::CommandBufferLevel) -> Result<vk::CommandBuffer> {
+    fn allocate_buffer(
+        &mut self,
+        device: &Device,
+        level: vk::CommandBufferLevel,
+    ) -> Result<vk::CommandBuffer> {
         if let Some(buffer) = self.available_buffers.pop_front() {
             self.in_use_buffers.push(buffer);
             return Ok(buffer);
@@ -85,7 +86,8 @@ impl CommandPool {
             .command_buffer_count(1);
 
         let buffers = unsafe {
-            device.allocate_command_buffers(&alloc_info)
+            device
+                .allocate_command_buffers(&alloc_info)
                 .map_err(|e| CommandError::BufferAllocation(e.to_string()))?
         };
 
@@ -96,7 +98,8 @@ impl CommandPool {
 
     fn reset_pool(&mut self, device: &Device) -> Result<()> {
         unsafe {
-            device.reset_command_pool(self.pool, self.reset_flags)
+            device
+                .reset_command_pool(self.pool, self.reset_flags)
                 .map_err(|e| CommandError::Recording(e.to_string()))?;
         }
 
@@ -123,23 +126,25 @@ pub struct FrameData {
 
 impl FrameData {
     fn new(device: &Device, frame_index: u32) -> Result<Self> {
-        let fence_info = vk::FenceCreateInfo::builder()
-            .flags(vk::FenceCreateFlags::SIGNALED);
+        let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
 
         let submission_fence = unsafe {
-            device.create_fence(&fence_info, None)
+            device
+                .create_fence(&fence_info, None)
                 .map_err(|e| CommandError::Synchronization(e.to_string()))?
         };
 
         let semaphore_info = vk::SemaphoreCreateInfo::builder();
 
         let render_finished_semaphore = unsafe {
-            device.create_semaphore(&semaphore_info, None)
+            device
+                .create_semaphore(&semaphore_info, None)
                 .map_err(|e| CommandError::Synchronization(e.to_string()))?
         };
 
         let image_available_semaphore = unsafe {
-            device.create_semaphore(&semaphore_info, None)
+            device
+                .create_semaphore(&semaphore_info, None)
                 .map_err(|e| CommandError::Synchronization(e.to_string()))?
         };
 
@@ -182,26 +187,27 @@ struct SubmissionBatch {
 impl CommandManager {
     pub async fn new(device: Arc<VulkanDevice>) -> Result<Self> {
         let max_frames_in_flight = 3;
-        
+
         let graphics_pools = Arc::new(Mutex::new(Self::create_pools(
             device.logical_device(),
             device.queue_families().graphics,
             vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
-            8
+            8,
         )?));
 
         let compute_pools = Arc::new(Mutex::new(Self::create_pools(
             device.logical_device(),
             device.queue_families().compute,
             vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
-            4
+            4,
         )?));
 
         let transfer_pools = Arc::new(Mutex::new(Self::create_pools(
             device.logical_device(),
             device.queue_families().transfer,
-            vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER | vk::CommandPoolCreateFlags::TRANSIENT,
-            4
+            vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+                | vk::CommandPoolCreateFlags::TRANSIENT,
+            4,
         )?));
 
         let mut frames_in_flight = VecDeque::with_capacity(max_frames_in_flight as usize);
@@ -233,7 +239,7 @@ impl CommandManager {
         device: &Device,
         queue_family: u32,
         flags: vk::CommandPoolCreateFlags,
-        count: usize
+        count: usize,
     ) -> Result<Vec<CommandPool>> {
         let mut pools = Vec::with_capacity(count);
         for _ in 0..count {
@@ -254,13 +260,14 @@ impl CommandManager {
         let frame_data = &mut frames[current_frame as usize];
 
         unsafe {
-            self.device.logical_device().wait_for_fences(
-                &[frame_data.submission_fence],
-                true,
-                u64::MAX
-            ).map_err(|e| CommandError::Synchronization(e.to_string()))?;
+            self.device
+                .logical_device()
+                .wait_for_fences(&[frame_data.submission_fence], true, u64::MAX)
+                .map_err(|e| CommandError::Synchronization(e.to_string()))?;
 
-            self.device.logical_device().reset_fences(&[frame_data.submission_fence])
+            self.device
+                .logical_device()
+                .reset_fences(&[frame_data.submission_fence])
                 .map_err(|e| CommandError::Synchronization(e.to_string()))?;
         }
 
@@ -272,17 +279,20 @@ impl CommandManager {
 
         drop(frames);
 
-        self.allocate_command_buffer(CommandBufferType::Graphics, vk::CommandBufferLevel::PRIMARY).await
+        self.allocate_command_buffer(CommandBufferType::Graphics, vk::CommandBufferLevel::PRIMARY)
+            .await
     }
 
     pub async fn allocate_command_buffer(
         &self,
         buffer_type: CommandBufferType,
-        level: vk::CommandBufferLevel
+        level: vk::CommandBufferLevel,
     ) -> Result<vk::CommandBuffer> {
         let thread_id = std::thread::current().id();
-        
-        let pool_index = self.thread_local_pools.get(&thread_id)
+
+        let pool_index = self
+            .thread_local_pools
+            .get(&thread_id)
             .map(|entry| *entry.value())
             .unwrap_or_else(|| {
                 let index = fastrand::usize(..8);
@@ -294,18 +304,21 @@ impl CommandManager {
             CommandBufferType::Graphics => {
                 let mut pools = self.graphics_pools.lock();
                 let pool_count = pools.len();
-                pools[pool_index % pool_count].allocate_buffer(self.device.logical_device(), level)?
-            },
+                pools[pool_index % pool_count]
+                    .allocate_buffer(self.device.logical_device(), level)?
+            }
             CommandBufferType::Compute => {
                 let mut pools = self.compute_pools.lock();
                 let pool_count = pools.len();
-                pools[pool_index % pool_count].allocate_buffer(self.device.logical_device(), level)?
-            },
+                pools[pool_index % pool_count]
+                    .allocate_buffer(self.device.logical_device(), level)?
+            }
             CommandBufferType::Transfer => {
                 let mut pools = self.transfer_pools.lock();
                 let pool_count = pools.len();
-                pools[pool_index % pool_count].allocate_buffer(self.device.logical_device(), level)?
-            },
+                pools[pool_index % pool_count]
+                    .allocate_buffer(self.device.logical_device(), level)?
+            }
         };
 
         let queue_family = match buffer_type {
@@ -315,7 +328,7 @@ impl CommandManager {
         };
 
         let current_frame = *self.current_frame.read();
-        
+
         let buffer_info = CommandBufferInfo {
             buffer,
             pool: vk::CommandPool::null(),
@@ -331,7 +344,9 @@ impl CommandManager {
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         unsafe {
-            self.device.logical_device().begin_command_buffer(buffer, &begin_info)
+            self.device
+                .logical_device()
+                .begin_command_buffer(buffer, &begin_info)
                 .map_err(|e| CommandError::Recording(e.to_string()))?;
         }
 
@@ -344,7 +359,9 @@ impl CommandManager {
 
     pub async fn end_command_buffer(&self, buffer: vk::CommandBuffer) -> Result<()> {
         unsafe {
-            self.device.logical_device().end_command_buffer(buffer)
+            self.device
+                .logical_device()
+                .end_command_buffer(buffer)
                 .map_err(|e| CommandError::Recording(e.to_string()))?;
         }
 
@@ -360,9 +377,11 @@ impl CommandManager {
         buffer: vk::CommandBuffer,
         wait_semaphores: &[vk::Semaphore],
         wait_stages: &[vk::PipelineStageFlags],
-        signal_semaphores: &[vk::Semaphore]
+        signal_semaphores: &[vk::Semaphore],
     ) -> Result<()> {
-        let buffer_info = self.command_buffer_registry.get(&buffer)
+        let buffer_info = self
+            .command_buffer_registry
+            .get(&buffer)
             .ok_or_else(|| CommandError::Submission("Buffer not found in registry".to_string()))?;
 
         let queue = match buffer_info.buffer_type {
@@ -374,7 +393,8 @@ impl CommandManager {
         // Get the submission fence, ensuring proper lifetime management
         let submission_fence = {
             let current_frame = *self.current_frame.read();
-            let frame_index = ((current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight) as usize;
+            let frame_index = ((current_frame + self.max_frames_in_flight - 1)
+                % self.max_frames_in_flight) as usize;
             let frames = self.frames_in_flight.read();
             frames[frame_index].submission_fence
         };
@@ -388,11 +408,10 @@ impl CommandManager {
             .build();
 
         unsafe {
-            self.device.logical_device().queue_submit(
-                queue,
-                &[submit_info],
-                submission_fence
-            ).map_err(|e| CommandError::Submission(e.to_string()))?;
+            self.device
+                .logical_device()
+                .queue_submit(queue, &[submit_info], submission_fence)
+                .map_err(|e| CommandError::Submission(e.to_string()))?;
         }
 
         Ok(())
@@ -404,7 +423,8 @@ impl CommandManager {
         // Get the frame index and extract semaphore/fence values, ensuring proper lifetime management
         let (render_finished_semaphore, submission_fence) = {
             let current_frame = *self.current_frame.read();
-            let frame_index = ((current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight) as usize;
+            let frame_index = ((current_frame + self.max_frames_in_flight - 1)
+                % self.max_frames_in_flight) as usize;
             let mut frames = self.frames_in_flight.write();
             let frame_data = &mut frames[frame_index];
 
@@ -414,7 +434,7 @@ impl CommandManager {
 
             let semaphore = frame_data.render_finished_semaphore;
             let fence = frame_data.submission_fence;
-            
+
             // Extract values before releasing the lock
             (semaphore, fence)
         };
@@ -427,17 +447,21 @@ impl CommandManager {
             .build();
 
         unsafe {
-            self.device.logical_device().queue_submit(
-                self.device.graphics_queue(),
-                &[submit_info],
-                submission_fence
-            ).map_err(|e| CommandError::Submission(e.to_string()))?;
+            self.device
+                .logical_device()
+                .queue_submit(
+                    self.device.graphics_queue(),
+                    &[submit_info],
+                    submission_fence,
+                )
+                .map_err(|e| CommandError::Submission(e.to_string()))?;
         }
 
         // Update the submission status
         {
             let current_frame = *self.current_frame.read();
-            let frame_index = ((current_frame + self.max_frames_in_flight - 1) % self.max_frames_in_flight) as usize;
+            let frame_index = ((current_frame + self.max_frames_in_flight - 1)
+                % self.max_frames_in_flight) as usize;
             let mut frames = self.frames_in_flight.write();
             frames[frame_index].is_submitted = true;
         }
@@ -451,11 +475,10 @@ impl CommandManager {
 
         if frame_data.is_submitted {
             unsafe {
-                self.device.logical_device().wait_for_fences(
-                    &[frame_data.submission_fence],
-                    true,
-                    u64::MAX
-                ).map_err(|e| CommandError::Synchronization(e.to_string()))?;
+                self.device
+                    .logical_device()
+                    .wait_for_fences(&[frame_data.submission_fence], true, u64::MAX)
+                    .map_err(|e| CommandError::Synchronization(e.to_string()))?;
             }
         }
 
@@ -484,7 +507,10 @@ impl CommandManager {
     pub fn get_frame_semaphores(&self, frame_index: u32) -> (vk::Semaphore, vk::Semaphore) {
         let frames = self.frames_in_flight.read();
         let frame_data = &frames[(frame_index % self.max_frames_in_flight) as usize];
-        (frame_data.image_available_semaphore, frame_data.render_finished_semaphore)
+        (
+            frame_data.image_available_semaphore,
+            frame_data.render_finished_semaphore,
+        )
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -492,35 +518,50 @@ impl CommandManager {
             let _ = sender.send(());
         }
 
-        self.device.wait_idle().await.map_err(|e| CommandError::Synchronization(e.to_string()))?;
+        self.device
+            .wait_idle()
+            .await
+            .map_err(|e| CommandError::Synchronization(e.to_string()))?;
 
         let frames = self.frames_in_flight.read();
         for frame_data in frames.iter() {
             unsafe {
-                self.device.logical_device().destroy_fence(frame_data.submission_fence, None);
-                self.device.logical_device().destroy_semaphore(frame_data.render_finished_semaphore, None);
-                self.device.logical_device().destroy_semaphore(frame_data.image_available_semaphore, None);
+                self.device
+                    .logical_device()
+                    .destroy_fence(frame_data.submission_fence, None);
+                self.device
+                    .logical_device()
+                    .destroy_semaphore(frame_data.render_finished_semaphore, None);
+                self.device
+                    .logical_device()
+                    .destroy_semaphore(frame_data.image_available_semaphore, None);
             }
         }
 
         let graphics_pools = self.graphics_pools.lock();
         for pool in graphics_pools.iter() {
             unsafe {
-                self.device.logical_device().destroy_command_pool(pool.pool, None);
+                self.device
+                    .logical_device()
+                    .destroy_command_pool(pool.pool, None);
             }
         }
 
         let compute_pools = self.compute_pools.lock();
         for pool in compute_pools.iter() {
             unsafe {
-                self.device.logical_device().destroy_command_pool(pool.pool, None);
+                self.device
+                    .logical_device()
+                    .destroy_command_pool(pool.pool, None);
             }
         }
 
         let transfer_pools = self.transfer_pools.lock();
         for pool in transfer_pools.iter() {
             unsafe {
-                self.device.logical_device().destroy_command_pool(pool.pool, None);
+                self.device
+                    .logical_device()
+                    .destroy_command_pool(pool.pool, None);
             }
         }
 

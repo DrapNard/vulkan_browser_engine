@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime};
-use std::sync::Arc;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone)]
 pub struct CacheResult {
@@ -17,11 +17,13 @@ pub trait CacheOperations: Send + Sync {
 }
 
 pub trait NetworkClient: Send + Sync {
-    fn fetch(&self, request: FetchRequest) -> Pin<Box<dyn Future<Output = Result<FetchResponse, NetworkError>> + Send + '_>>;
+    fn fetch(
+        &self,
+        request: FetchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<FetchResponse, NetworkError>> + Send + '_>>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum CacheStrategy {
     #[default]
     CacheFirst,
@@ -141,20 +143,33 @@ pub struct MockNetworkClient {
 
 impl<T: CacheOperations> StrategyExecutor<T> {
     pub fn new(cache: T, network: Arc<dyn NetworkClient>, config: StrategyConfig) -> Self {
-        Self { cache, network, config }
+        Self {
+            cache,
+            network,
+            config,
+        }
     }
 
-    pub async fn execute(&mut self, strategy: &CacheStrategy, request: &FetchRequest) -> Result<FetchResponse, StrategyError> {
+    pub async fn execute(
+        &mut self,
+        strategy: &CacheStrategy,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, StrategyError> {
         match strategy {
             CacheStrategy::CacheFirst => self.cache_first_strategy(request).await,
             CacheStrategy::NetworkFirst => self.network_first_strategy(request).await,
             CacheStrategy::NetworkOnly => self.network_only_strategy(request).await,
             CacheStrategy::CacheOnly => self.cache_only_strategy(request).await,
-            CacheStrategy::StaleWhileRevalidate => self.stale_while_revalidate_strategy(request).await,
+            CacheStrategy::StaleWhileRevalidate => {
+                self.stale_while_revalidate_strategy(request).await
+            }
         }
     }
 
-    async fn cache_first_strategy(&mut self, request: &FetchRequest) -> Result<FetchResponse, StrategyError> {
+    async fn cache_first_strategy(
+        &mut self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, StrategyError> {
         if let Some(cache_result) = self.cache.get_entry(&request.url).await {
             if !cache_result.is_stale {
                 let response = Self::entry_to_response(&cache_result.entry);
@@ -173,7 +188,10 @@ impl<T: CacheOperations> StrategyExecutor<T> {
         }
     }
 
-    async fn network_first_strategy(&mut self, request: &FetchRequest) -> Result<FetchResponse, StrategyError> {
+    async fn network_first_strategy(
+        &mut self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, StrategyError> {
         match self.fetch_with_retry(request).await {
             Ok(response) => {
                 self.maybe_cache_response(request, &response).await;
@@ -192,11 +210,17 @@ impl<T: CacheOperations> StrategyExecutor<T> {
         }
     }
 
-    async fn network_only_strategy(&self, request: &FetchRequest) -> Result<FetchResponse, StrategyError> {
+    async fn network_only_strategy(
+        &self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, StrategyError> {
         self.fetch_with_retry(request).await
     }
 
-    async fn cache_only_strategy(&mut self, request: &FetchRequest) -> Result<FetchResponse, StrategyError> {
+    async fn cache_only_strategy(
+        &mut self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, StrategyError> {
         if let Some(cache_result) = self.cache.get_entry(&request.url).await {
             let response = Self::entry_to_response(&cache_result.entry);
             let updated_entry = self.update_access_stats(cache_result.entry);
@@ -207,19 +231,22 @@ impl<T: CacheOperations> StrategyExecutor<T> {
         }
     }
 
-    async fn stale_while_revalidate_strategy(&mut self, request: &FetchRequest) -> Result<FetchResponse, StrategyError> {
+    async fn stale_while_revalidate_strategy(
+        &mut self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, StrategyError> {
         if let Some(cache_result) = self.cache.get_entry(&request.url).await {
             let response = Self::entry_to_response(&cache_result.entry);
-            
+
             if cache_result.is_stale && self.config.background_refresh {
                 let network = Arc::clone(&self.network);
                 let request_clone = request.clone();
-                
+
                 tokio::spawn(async move {
                     let _ = network.fetch(request_clone).await;
                 });
             }
-            
+
             let updated_entry = self.update_access_stats(cache_result.entry);
             let _ = self.cache.put_entry(&request.url, updated_entry).await;
             Ok(response)
@@ -234,9 +261,12 @@ impl<T: CacheOperations> StrategyExecutor<T> {
         }
     }
 
-    async fn fetch_with_retry(&self, request: &FetchRequest) -> Result<FetchResponse, StrategyError> {
+    async fn fetch_with_retry(
+        &self,
+        request: &FetchRequest,
+    ) -> Result<FetchResponse, StrategyError> {
         let mut last_error = None;
-        
+
         for attempt in 0..=self.config.retry_attempts {
             match self.network.fetch(request.clone()).await {
                 Ok(response) => return Ok(response),
@@ -249,7 +279,7 @@ impl<T: CacheOperations> StrategyExecutor<T> {
                 }
             }
         }
-        
+
         Err(StrategyError::Network(last_error.unwrap()))
     }
 
@@ -268,7 +298,7 @@ impl<T: CacheOperations> StrategyExecutor<T> {
                 access_count: 1,
                 last_accessed: SystemTime::now(),
             };
-            
+
             let _ = self.cache.put_entry(&request.url, entry).await;
         }
     }
@@ -288,45 +318,46 @@ impl<T: CacheOperations> StrategyExecutor<T> {
     }
 
     fn calculate_expiry(headers: &HashMap<String, String>) -> Option<SystemTime> {
-        if let Some(cache_control) = headers.get("cache-control").or_else(|| headers.get("Cache-Control")) {
+        if let Some(cache_control) = headers
+            .get("cache-control")
+            .or_else(|| headers.get("Cache-Control"))
+        {
             if cache_control.contains("no-cache") || cache_control.contains("no-store") {
                 return None;
             }
-            
+
             if let Some(max_age) = Self::extract_max_age(cache_control) {
                 return Some(SystemTime::now() + Duration::from_secs(max_age));
             }
         }
-        
+
         if let Some(expires_header) = headers.get("expires").or_else(|| headers.get("Expires")) {
             if let Some(expires_time) = Self::parse_http_date(expires_header) {
                 return Some(expires_time);
             }
         }
-        
+
         Some(SystemTime::now() + Duration::from_secs(300))
     }
 
     fn extract_max_age(cache_control: &str) -> Option<u64> {
-        cache_control
-            .split(',')
-            .find_map(|directive| {
-                let directive = directive.trim();
-                if directive.starts_with("max-age=") {
-                    directive[8..].trim().parse().ok()
-                } else {
-                    None
-                }
-            })
+        cache_control.split(',').find_map(|directive| {
+            let directive = directive.trim();
+            if directive.starts_with("max-age=") {
+                directive[8..].trim().parse().ok()
+            } else {
+                None
+            }
+        })
     }
 
     fn parse_http_date(date_str: &str) -> Option<SystemTime> {
         let formats = [
             "%a, %d %b %Y %H:%M:%S GMT",
-            "%A, %d-%b-%y %H:%M:%S GMT", 
+            "%A, %d-%b-%y %H:%M:%S GMT",
             "%a %b %e %H:%M:%S %Y",
         ];
-        
+
         for format in &formats {
             if let Ok(datetime) = chrono::DateTime::parse_from_str(date_str, format) {
                 let timestamp = datetime.timestamp();
@@ -335,7 +366,7 @@ impl<T: CacheOperations> StrategyExecutor<T> {
                 }
             }
         }
-        
+
         None
     }
 
@@ -357,9 +388,9 @@ impl ReqwestNetworkClient {
             .pool_max_idle_per_host(10)
             .build()
             .expect("Failed to build HTTP client");
-        
-        Self { 
-            client, 
+
+        Self {
+            client,
             timeout,
             max_retries: 3,
         }
@@ -372,7 +403,10 @@ impl ReqwestNetworkClient {
 }
 
 impl NetworkClient for ReqwestNetworkClient {
-    fn fetch(&self, request: FetchRequest) -> Pin<Box<dyn Future<Output = Result<FetchResponse, NetworkError>> + Send + '_>> {
+    fn fetch(
+        &self,
+        request: FetchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<FetchResponse, NetworkError>> + Send + '_>> {
         Box::pin(async move {
             let method = match request.method.as_str() {
                 "GET" => reqwest::Method::GET,
@@ -390,7 +424,7 @@ impl NetworkClient for ReqwestNetworkClient {
             for (key, value) in &request.headers {
                 if let (Ok(name), Ok(value)) = (
                     reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                    reqwest::header::HeaderValue::from_str(value)
+                    reqwest::header::HeaderValue::from_str(value),
                 ) {
                     req_builder = req_builder.header(name, value);
                 }
@@ -418,22 +452,22 @@ impl NetworkClient for ReqwestNetworkClient {
                 })?;
 
             let status = response.status().as_u16();
-            
-            let headers = response.headers()
+
+            let headers = response
+                .headers()
                 .iter()
                 .filter_map(|(k, v)| {
-                    v.to_str().ok().map(|value| (k.to_string(), value.to_string()))
+                    v.to_str()
+                        .ok()
+                        .map(|value| (k.to_string(), value.to_string()))
                 })
                 .collect();
-            
-            let body = tokio::time::timeout(
-                self.timeout,
-                response.bytes()
-            )
-            .await
-            .map_err(|_| NetworkError::Timeout(self.timeout))?
-            .map_err(|e| NetworkError::Network(e.to_string()))?
-            .to_vec();
+
+            let body = tokio::time::timeout(self.timeout, response.bytes())
+                .await
+                .map_err(|_| NetworkError::Timeout(self.timeout))?
+                .map_err(|e| NetworkError::Network(e.to_string()))?
+                .to_vec();
 
             Ok(FetchResponse {
                 status,
@@ -470,14 +504,19 @@ impl MockNetworkClient {
 }
 
 impl NetworkClient for MockNetworkClient {
-    fn fetch(&self, request: FetchRequest) -> Pin<Box<dyn Future<Output = Result<FetchResponse, NetworkError>> + Send + '_>> {
+    fn fetch(
+        &self,
+        request: FetchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<FetchResponse, NetworkError>> + Send + '_>> {
         let delay = self.delay;
         let response = self.responses.get(&request.url).cloned();
-        
+
         Box::pin(async move {
             tokio::time::sleep(delay).await;
-            
-            response.ok_or_else(|| NetworkError::Network(format!("No mock response for {}", request.url)))
+
+            response.ok_or_else(|| {
+                NetworkError::Network(format!("No mock response for {}", request.url))
+            })
         })
     }
 }
@@ -487,7 +526,7 @@ impl CacheEntry {
         if let Some(expires_at) = self.expires_at {
             return SystemTime::now() > expires_at;
         }
-        
+
         SystemTime::now()
             .duration_since(self.stored_at)
             .map(|age| age > threshold)
@@ -506,7 +545,7 @@ impl CacheEntry {
             .duration_since(self.stored_at)
             .unwrap_or_default()
             .as_secs() as f64;
-        
+
         if age > 0.0 {
             self.access_count as f64 / age
         } else {
@@ -526,4 +565,3 @@ impl Default for StrategyConfig {
         }
     }
 }
-
