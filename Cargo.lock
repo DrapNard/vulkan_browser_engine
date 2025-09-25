@@ -4471,7 +4471,7 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite 0.27.0",
+ "tungstenite",
 ]
 
 [[package]]
@@ -4628,25 +4628,6 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
-
-[[package]]
-name = "tungstenite"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ef1a641ea34f399a848dea702823bbecfb4c486f911735368f1f137cb8257e1"
-dependencies = [
- "byteorder",
- "bytes",
- "data-encoding",
- "http 1.3.1",
- "httparse",
- "log",
- "rand 0.8.5",
- "sha1",
- "thiserror 1.0.69",
- "url",
- "utf-8",
-]
 
 [[package]]
 name = "tungstenite"
@@ -4944,7 +4925,7 @@ dependencies = [
  "tracing-subscriber",
  "tracy-client",
  "ttf-parser 0.20.0",
- "tungstenite 0.21.0",
+ "tungstenite",
  "url",
  "uuid",
  "v8",
