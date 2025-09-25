@@ -4917,7 +4917,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "quinn",
- "rand 0.8.5",
+ "rand 0.9.1",
  "raw-window-handle",
  "rayon",
  "reqwest",
