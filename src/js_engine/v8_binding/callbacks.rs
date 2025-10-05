@@ -1,6 +1,5 @@
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use v8::{
     Function, FunctionCallbackArguments, HandleScope, Local, Object, PromiseResolver, ReturnValue,
@@ -22,7 +21,7 @@ pub enum CallbackError {
 type CallbackResult<T> = Result<T, CallbackError>;
 
 pub struct CallbackRegistry {
-    functions: Arc<RwLock<HashMap<String, v8::Global<Function>>>>,
+    functions: RwLock<HashMap<String, v8::Global<Function>>>,
 }
 
 impl Default for CallbackRegistry {
@@ -34,18 +33,16 @@ impl Default for CallbackRegistry {
 impl CallbackRegistry {
     pub fn new() -> Self {
         Self {
-            functions: Arc::new(RwLock::new(HashMap::new())),
+            functions: RwLock::new(HashMap::new()),
         }
     }
 
-    pub async fn register_function(&self, name: String, function: v8::Global<Function>) {
-        let mut functions = self.functions.write().await;
-        functions.insert(name, function);
+    pub fn register_function(&self, name: String, function: v8::Global<Function>) {
+        self.functions.write().insert(name, function);
     }
 
-    pub async fn get_function(&self, name: &str) -> Option<v8::Global<Function>> {
-        let functions = self.functions.read().await;
-        functions.get(name).cloned()
+    pub fn get_function(&self, name: &str) -> Option<v8::Global<Function>> {
+        self.functions.read().get(name).cloned()
     }
 }
 

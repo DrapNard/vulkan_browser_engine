@@ -5,7 +5,6 @@ use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::ffi::CStr;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -576,8 +575,7 @@ impl ShaderManager {
         render_pass: vk::RenderPass,
         layout: vk::PipelineLayout,
     ) -> Result<vk::Pipeline> {
-        let entry_point = CStr::from_bytes_with_nul(b"main\0")
-            .expect("shader entry point should be a valid C string");
+        let entry_point = c"main";
 
         let vertex_stage_info = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::VERTEX)

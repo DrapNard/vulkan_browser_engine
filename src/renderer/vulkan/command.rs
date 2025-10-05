@@ -243,28 +243,28 @@ impl CommandManager {
             f
         };
 
-        let mut frames = self.frames_in_flight.write();
-        let frame_data = &mut frames[current_frame as usize];
+        {
+            let mut frames = self.frames_in_flight.write();
+            let frame_data = &mut frames[current_frame as usize];
 
-        unsafe {
-            self.device
-                .logical_device()
-                .wait_for_fences(&[frame_data.submission_fence], true, u64::MAX)
-                .map_err(|e| CommandError::Synchronization(e.to_string()))?;
+            unsafe {
+                self.device
+                    .logical_device()
+                    .wait_for_fences(&[frame_data.submission_fence], true, u64::MAX)
+                    .map_err(|e| CommandError::Synchronization(e.to_string()))?;
 
-            self.device
-                .logical_device()
-                .reset_fences(&[frame_data.submission_fence])
-                .map_err(|e| CommandError::Synchronization(e.to_string()))?;
+                self.device
+                    .logical_device()
+                    .reset_fences(&[frame_data.submission_fence])
+                    .map_err(|e| CommandError::Synchronization(e.to_string()))?;
+            }
+
+            for buffer_info in &frame_data.command_buffers {
+                self.command_buffer_registry.remove(&buffer_info.buffer);
+            }
+            frame_data.command_buffers.clear();
+            frame_data.is_submitted = false;
         }
-
-        for buffer_info in &frame_data.command_buffers {
-            self.command_buffer_registry.remove(&buffer_info.buffer);
-        }
-        frame_data.command_buffers.clear();
-        frame_data.is_submitted = false;
-
-        drop(frames);
 
         self.allocate_command_buffer(CommandBufferType::Graphics, vk::CommandBufferLevel::PRIMARY)
             .await

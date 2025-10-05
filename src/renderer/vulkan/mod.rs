@@ -3,7 +3,6 @@ use ash::{Device, Entry, Instance};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
-use std::ffi::CStr;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -206,10 +205,8 @@ impl VulkanRenderer {
     }
 
     fn create_instance(entry: &Entry) -> Result<Instance> {
-        let app_name =
-            CStr::from_bytes_with_nul(b"Vulkan Browser\0").expect("static application name");
-        let engine_name =
-            CStr::from_bytes_with_nul(b"VulkanBrowserEngine\0").expect("static engine name");
+        let app_name = c"Vulkan Browser";
+        let engine_name = c"VulkanBrowserEngine";
 
         let app_info = vk::ApplicationInfo::builder()
             .application_name(app_name)
@@ -224,9 +221,7 @@ impl VulkanRenderer {
 
         if cfg!(debug_assertions) {
             extension_names.push(ash::extensions::ext::DebugUtils::name().as_ptr());
-            let validation_layer = CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0")
-                .expect("validation layer name");
-            layer_names.push(validation_layer.as_ptr());
+            layer_names.push(c"VK_LAYER_KHRONOS_validation".as_ptr());
         }
 
         let create_info = vk::InstanceCreateInfo::builder()
@@ -352,10 +347,13 @@ impl VulkanRenderer {
     pub async fn render(&self, document: &Document, layout_engine: &LayoutEngine) -> Result<()> {
         let frame_start = std::time::Instant::now();
 
-        let swapchain_data = self.swapchain_data.read();
-        if swapchain_data.swapchain == vk::SwapchainKHR::null() {
-            return Ok(());
-        }
+        let swapchain_data = {
+            let swapchain = self.swapchain_data.read();
+            if swapchain.swapchain == vk::SwapchainKHR::null() {
+                return Ok(());
+            }
+            swapchain.clone()
+        };
 
         let image_index = self.acquire_next_image(&swapchain_data)?;
         let command_buffer = self.command_manager.begin_frame().await?;
@@ -363,17 +361,23 @@ impl VulkanRenderer {
         self.begin_render_pass(command_buffer, &swapchain_data, image_index)?;
 
         let mut stats = RenderStats::default();
+        let mut batch = {
+            let mut guard = self.command_batches.write();
+            std::mem::take(&mut *guard)
+        };
+
+        batch = self
+            .build_render_commands(document, layout_engine, batch)
+            .await?;
+        stats.draw_calls = batch.len() as u32;
+
+        for command in batch.iter() {
+            self.execute_render_command(command_buffer, command, &mut stats)?;
+        }
+
         {
-            let mut batch = self.command_batches.write();
-            batch.clear();
-
-            self.build_render_commands(document, layout_engine, &mut batch)
-                .await?;
-            stats.draw_calls = batch.len() as u32;
-
-            for command in batch.iter() {
-                self.execute_render_command(command_buffer, command, &mut stats)?;
-            }
+            let mut guard = self.command_batches.write();
+            *guard = batch;
         }
 
         self.end_render_pass(command_buffer)?;
@@ -393,9 +397,10 @@ impl VulkanRenderer {
         &self,
         _document: &Document,
         _layout_engine: &LayoutEngine,
-        _batch: &mut Vec<RenderCommand>,
-    ) -> Result<()> {
-        Ok(())
+        mut batch: Vec<RenderCommand>,
+    ) -> Result<Vec<RenderCommand>> {
+        batch.clear();
+        Ok(batch)
     }
 
     fn acquire_next_image(&self, swapchain_data: &SwapchainData) -> Result<u32> {

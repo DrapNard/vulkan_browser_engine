@@ -514,7 +514,12 @@ impl SecurityPolicy {
                 ipv4.is_private() || ipv4.is_loopback() || ipv4.is_link_local()
             }
             std::net::IpAddr::V6(ipv6) => {
-                ipv6.is_loopback() || ipv6.is_unique_local() || ipv6.is_unicast_link_local()
+                let octets = ipv6.octets();
+                let prefix = u16::from_be_bytes([octets[0], octets[1]]);
+                let is_unique_local = (prefix & 0xfe00) == 0xfc00;
+                let is_link_local = (prefix & 0xffc0) == 0xfe80;
+
+                ipv6.is_loopback() || is_unique_local || is_link_local
             }
         }
     }

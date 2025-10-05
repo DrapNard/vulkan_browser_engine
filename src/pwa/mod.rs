@@ -9,19 +9,18 @@ use cache::{CacheError, CacheManager};
 use manifest::{Manifest, ManifestError, ManifestParser};
 use service_worker::{ServiceWorkerError, ServiceWorkerManager};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::SystemTime;
 use storage::{StorageError, StorageManager};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 pub struct PwaRuntime {
-    cache_manager: Arc<Mutex<CacheManager>>,
-    storage_manager: Arc<Mutex<StorageManager>>,
-    service_worker_manager: Arc<Mutex<ServiceWorkerManager>>,
-    installed_apps: Arc<RwLock<HashMap<String, InstalledApp>>>,
+    cache_manager: Mutex<CacheManager>,
+    storage_manager: Mutex<StorageManager>,
+    service_worker_manager: Mutex<ServiceWorkerManager>,
+    installed_apps: RwLock<HashMap<String, InstalledApp>>,
     manifest_parser: ManifestParser,
-    is_shutdown: Arc<RwLock<bool>>,
+    is_shutdown: RwLock<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,12 +57,12 @@ pub struct StorageUsage {
 
 impl PwaRuntime {
     pub async fn new() -> Result<Self, PwaError> {
-        let cache_manager = Arc::new(Mutex::new(CacheManager::new().await?));
-        let storage_manager = Arc::new(Mutex::new(StorageManager::new().await?));
-        let service_worker_manager = Arc::new(Mutex::new(ServiceWorkerManager::new().await?));
-        let installed_apps = Arc::new(RwLock::new(HashMap::new()));
+        let cache_manager = Mutex::new(CacheManager::new().await?);
+        let storage_manager = Mutex::new(StorageManager::new().await?);
+        let service_worker_manager = Mutex::new(ServiceWorkerManager::new().await?);
+        let installed_apps = RwLock::new(HashMap::new());
         let manifest_parser = ManifestParser::new();
-        let is_shutdown = Arc::new(RwLock::new(false));
+        let is_shutdown = RwLock::new(false);
 
         Ok(Self {
             cache_manager,

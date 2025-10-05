@@ -11,9 +11,14 @@ use tokio::sync::{Notify, RwLock};
 use tokio::time::interval;
 use tracing::{error, info};
 
+type PolicyStore = HashMap<u32, Arc<ProcessPermissions>>;
+type CapabilityKey = (u32, Capability);
+type CapabilityCacheEntry = (bool, SystemTime);
+type CapabilityCache = HashMap<CapabilityKey, CapabilityCacheEntry>;
+
 pub struct PermissionManager {
-    policies: Arc<RwLock<HashMap<u32, Arc<ProcessPermissions>>>>,
-    capability_cache: Arc<RwLock<HashMap<(u32, Capability), (bool, SystemTime)>>>,
+    policies: Arc<RwLock<PolicyStore>>,
+    capability_cache: Arc<RwLock<CapabilityCache>>,
     auditor: Arc<SecurityAuditor>,
     capability_checker: Arc<CapabilityChecker>,
     metrics: Arc<PermissionMetrics>,
@@ -361,7 +366,7 @@ impl PermissionManager {
     }
 
     async fn cleanup_expired_permissions_background(
-        policies: Arc<RwLock<HashMap<u32, Arc<ProcessPermissions>>>>,
+        policies: Arc<RwLock<PolicyStore>>,
         auditor: Arc<SecurityAuditor>,
         metrics: Arc<PermissionMetrics>,
     ) {
@@ -392,9 +397,7 @@ impl PermissionManager {
         }
     }
 
-    async fn cleanup_cache_background(
-        cache: Arc<RwLock<HashMap<(u32, Capability), (bool, SystemTime)>>>,
-    ) {
+    async fn cleanup_cache_background(cache: Arc<RwLock<CapabilityCache>>) {
         let cutoff = SystemTime::now() - Duration::from_secs(600);
         let mut cache_guard = cache.write().await;
         cache_guard.retain(|_, (_, timestamp)| *timestamp > cutoff);

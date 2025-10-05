@@ -312,11 +312,7 @@ impl<T: CacheOperations> StrategyExecutor<T> {
     }
 
     fn is_cacheable(response: &FetchResponse) -> bool {
-        match response.status {
-            200..=299 => true,
-            304 => true,
-            _ => false,
-        }
+        matches!(response.status, 200..=299 | 304)
     }
 
     fn calculate_expiry(headers: &HashMap<String, String>) -> Option<SystemTime> {
@@ -344,12 +340,11 @@ impl<T: CacheOperations> StrategyExecutor<T> {
 
     fn extract_max_age(cache_control: &str) -> Option<u64> {
         cache_control.split(',').find_map(|directive| {
-            let directive = directive.trim();
-            if directive.starts_with("max-age=") {
-                directive[8..].trim().parse().ok()
-            } else {
-                None
-            }
+            directive
+                .trim()
+                .strip_prefix("max-age=")
+                .map(str::trim)
+                .and_then(|value| value.parse().ok())
         })
     }
 

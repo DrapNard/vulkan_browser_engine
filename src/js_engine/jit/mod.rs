@@ -196,16 +196,16 @@ impl ProfilerData {
 }
 
 pub struct JITCompiler {
-    module: Arc<Mutex<JITModule>>,
-    builder_context: Arc<Mutex<FunctionBuilderContext>>,
-    cranelift_context: Arc<Mutex<CraneliftContext>>,
-    compiled_functions: Arc<DashMap<String, CompiledFunction>>,
+    module: Mutex<JITModule>,
+    builder_context: Mutex<FunctionBuilderContext>,
+    cranelift_context: Mutex<CraneliftContext>,
+    compiled_functions: DashMap<String, CompiledFunction>,
     optimization_level: OptimizationLevel,
-    profiler_data: Arc<ProfilerData>,
-    runtime_helpers: Arc<DashMap<String, *const u8>>,
-    type_specializations: Arc<DashMap<String, HashMap<String, FuncId>>>,
+    profiler_data: ProfilerData,
+    runtime_helpers: DashMap<String, *const u8>,
+    type_specializations: DashMap<String, HashMap<String, FuncId>>,
     #[allow(dead_code)]
-    deoptimization_stubs: Arc<DashMap<String, FuncId>>,
+    deoptimization_stubs: DashMap<String, FuncId>,
 }
 
 impl JITCompiler {
@@ -246,15 +246,15 @@ impl JITCompiler {
         let module = JITModule::new(builder);
 
         let compiler = Self {
-            module: Arc::new(Mutex::new(module)),
-            builder_context: Arc::new(Mutex::new(FunctionBuilderContext::new())),
-            cranelift_context: Arc::new(Mutex::new(CraneliftContext::new())),
-            compiled_functions: Arc::new(DashMap::new()),
+            module: Mutex::new(module),
+            builder_context: Mutex::new(FunctionBuilderContext::new()),
+            cranelift_context: Mutex::new(CraneliftContext::new()),
+            compiled_functions: DashMap::new(),
             optimization_level,
-            profiler_data: Arc::new(ProfilerData::new()),
-            runtime_helpers: Arc::new(DashMap::new()),
-            type_specializations: Arc::new(DashMap::new()),
-            deoptimization_stubs: Arc::new(DashMap::new()),
+            profiler_data: ProfilerData::new(),
+            runtime_helpers: DashMap::new(),
+            type_specializations: DashMap::new(),
+            deoptimization_stubs: DashMap::new(),
         };
 
         compiler.setup_runtime_helpers().await?;

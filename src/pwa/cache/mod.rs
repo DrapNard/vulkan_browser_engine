@@ -269,12 +269,11 @@ impl CacheManager {
 
     fn extract_max_age(cache_control: &str) -> Option<u64> {
         cache_control.split(',').find_map(|directive| {
-            let directive = directive.trim();
-            if directive.starts_with("max-age=") {
-                directive[8..].trim().parse().ok()
-            } else {
-                None
-            }
+            directive
+                .trim()
+                .strip_prefix("max-age=")
+                .map(str::trim)
+                .and_then(|value| value.parse().ok())
         })
     }
 

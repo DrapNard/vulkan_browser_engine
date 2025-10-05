@@ -314,7 +314,7 @@ impl SandboxedProcess {
                 .await
                 .map_err(|_| ProcessError::MonitoringFailed)?;
 
-            Ok(ProcessInfo::parse_linux_proc(stat_content, status_content)?)
+            ProcessInfo::parse_linux_proc(stat_content, status_content)
         }
 
         #[cfg(not(target_os = "linux"))]

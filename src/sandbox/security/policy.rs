@@ -372,7 +372,7 @@ impl SecurityPolicyEngine {
             PolicyCondition::SystemCall { syscall_name, .. } => event
                 .details
                 .get("syscall")
-                .map_or(false, |sc| sc == syscall_name),
+                .is_some_and(|sc| sc == syscall_name),
             PolicyCondition::Composite {
                 operator,
                 conditions,
@@ -391,25 +391,27 @@ impl SecurityPolicyEngine {
         let event_access_type = event.details.get("access_type");
         let event_path = event.details.get("path");
 
-        let resource_match =
-            event_resource_type.map_or(false, |rt| match (resource_type, rt.as_str()) {
-                (ResourceType::File, "file") => true,
-                (ResourceType::Directory, "directory") => true,
-                (ResourceType::Network, "network") => true,
-                _ => false,
-            });
-
-        let access_match = event_access_type.map_or(false, |at| match (access_type, at.as_str()) {
-            (AccessType::Read, "read") => true,
-            (AccessType::Write, "write") => true,
-            (AccessType::Execute, "execute") => true,
-            _ => false,
+        let resource_match = event_resource_type.is_some_and(|rt| {
+            matches!(
+                (resource_type, rt.as_str()),
+                (ResourceType::File, "file")
+                    | (ResourceType::Directory, "directory")
+                    | (ResourceType::Network, "network")
+            )
         });
 
-        let path_match = if let Some(expected_path) = resource_path {
-            event_path.map_or(false, |path| path.contains(expected_path))
-        } else {
-            true
+        let access_match = event_access_type.is_some_and(|at| {
+            matches!(
+                (access_type, at.as_str()),
+                (AccessType::Read, "read")
+                    | (AccessType::Write, "write")
+                    | (AccessType::Execute, "execute")
+            )
+        });
+
+        let path_match = match resource_path {
+            Some(expected_path) => event_path.is_some_and(|path| path.contains(expected_path)),
+            None => true,
         };
 
         resource_match && access_match && path_match
@@ -422,32 +424,29 @@ impl SecurityPolicyEngine {
         destination: &Option<String>,
         port: &Option<u16>,
     ) -> bool {
-        let protocol_match = if let Some(expected_protocol) = protocol {
-            event
+        let protocol_match = match protocol {
+            Some(expected_protocol) => event
                 .details
                 .get("protocol")
-                .map_or(false, |p| p == expected_protocol)
-        } else {
-            true
+                .is_some_and(|p| p == expected_protocol),
+            None => true,
         };
 
-        let destination_match = if let Some(expected_dest) = destination {
-            event
+        let destination_match = match destination {
+            Some(expected_dest) => event
                 .details
                 .get("destination")
-                .map_or(false, |d| d.contains(expected_dest))
-        } else {
-            true
+                .is_some_and(|d| d.contains(expected_dest)),
+            None => true,
         };
 
-        let port_match = if let Some(expected_port) = port {
-            event
+        let port_match = match port {
+            Some(expected_port) => event
                 .details
                 .get("port")
                 .and_then(|p| p.parse::<u16>().ok())
-                .map_or(false, |p| p == *expected_port)
-        } else {
-            true
+                .is_some_and(|p| p == *expected_port),
+            None => true,
         };
 
         protocol_match && destination_match && port_match
@@ -697,23 +696,20 @@ impl SecurityPolicyEngine {
             ));
         }
 
-        self.validate_condition(&rule.condition)?;
+        Self::validate_condition(&rule.condition)?;
         Ok(())
     }
 
-    fn validate_condition(&self, condition: &PolicyCondition) -> Result<(), PolicyError> {
-        match condition {
-            PolicyCondition::Composite { conditions, .. } => {
-                if conditions.is_empty() {
-                    return Err(PolicyError::InvalidPolicy(
-                        "Composite condition must have at least one sub-condition".to_string(),
-                    ));
-                }
-                for sub_condition in conditions {
-                    self.validate_condition(sub_condition)?;
-                }
+    fn validate_condition(condition: &PolicyCondition) -> Result<(), PolicyError> {
+        if let PolicyCondition::Composite { conditions, .. } = condition {
+            if conditions.is_empty() {
+                return Err(PolicyError::InvalidPolicy(
+                    "Composite condition must have at least one sub-condition".to_string(),
+                ));
             }
-            _ => {}
+            for sub_condition in conditions {
+                Self::validate_condition(sub_condition)?;
+            }
         }
         Ok(())
     }

@@ -24,6 +24,9 @@ pub enum DeviceError {
 
 pub type Result<T> = std::result::Result<T, DeviceError>;
 
+type QueueSet = (vk::Queue, vk::Queue, vk::Queue, Option<vk::Queue>);
+type LogicalDeviceBundle = (Device, QueueSet, Vec<&'static CStr>);
+
 #[derive(Debug, Clone, Copy)]
 pub struct QueueFamilyIndices {
     pub graphics: u32,
@@ -289,11 +292,7 @@ impl VulkanDevice {
         physical_device: vk::PhysicalDevice,
         queue_families: QueueFamilyIndices,
         capabilities: &DeviceCapabilities,
-    ) -> Result<(
-        Device,
-        (vk::Queue, vk::Queue, vk::Queue, Option<vk::Queue>),
-        Vec<&'static CStr>,
-    )> {
+    ) -> Result<LogicalDeviceBundle> {
         let queue_priorities = [1.0];
 
         let mut queue_create_infos = SmallVec::<[vk::DeviceQueueCreateInfo; 4]>::new();
@@ -453,9 +452,8 @@ impl VulkanDevice {
             ash::extensions::khr::Synchronization2::name(),
             ash::extensions::khr::PushDescriptor::name(),
             // Use raw extension names for extensions not available as separate structs
-            CStr::from_bytes_with_nul(b"VK_EXT_descriptor_indexing\0").expect("static string"),
-            CStr::from_bytes_with_nul(b"VK_EXT_shader_viewport_index_layer\0")
-                .expect("static string"),
+            c"VK_EXT_descriptor_indexing",
+            c"VK_EXT_shader_viewport_index_layer",
         ]
     }
 

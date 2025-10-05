@@ -27,8 +27,8 @@ pub mod renderer;
 pub mod sandbox;
 
 use crate::core::{
-    css::StyleEngine,
-    dom::Document,
+    css::{Color, ComputedStyles, ComputedValue, StyleEngine},
+    dom::{document::NodeType as DomNodeType, Document, NodeId},
     events::EventSystem,
     layout::LayoutEngine,
     network::{NetworkError, NetworkManager},
@@ -36,7 +36,9 @@ use crate::core::{
 use crate::js_engine::{JSError, JSRuntime};
 use crate::pwa::PwaError;
 use crate::pwa::PwaRuntime as PwaManager;
-use crate::renderer::{LayoutTree, RenderError, VulkanRenderer};
+use crate::renderer::{
+    ElementType, LayoutNode, LayoutTree, Rect, RenderError, Style, VulkanRenderer,
+};
 use crate::sandbox::{SandboxError, SandboxManager};
 
 /// Short alias to reduce trait-object verbosity in signatures/fields.
@@ -366,6 +368,7 @@ impl BrowserEngine {
                 .map_err(|e| BrowserError::RendererInit(e.to_string()))?,
         ));
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let js_runtime = Arc::new(RwLock::new(JSRuntime::new(&config).await?));
 
         let document = Arc::new(RwLock::new(Document::new()));
@@ -384,6 +387,7 @@ impl BrowserEngine {
         };
 
         let pwa_manager = if config.enable_pwa {
+            #[allow(clippy::arc_with_non_send_sync)]
             Some(Arc::new(PwaManager::new().await?))
         } else {
             None
@@ -851,7 +855,205 @@ impl BrowserEngine {
     }
 
     async fn create_layout_tree(&self) -> Result<LayoutTree> {
-        Ok(LayoutTree::new())
+        let document = self.document.read().await;
+        let layout_engine = self.layout_engine.read().await;
+
+        let mut layout_tree = LayoutTree::new();
+
+        if let Some(root) = document.get_root_node() {
+            self.build_layout_tree(&document, &layout_engine, root, &mut layout_tree);
+        }
+
+        Ok(layout_tree)
+    }
+
+    fn build_layout_tree(
+        &self,
+        document: &Document,
+        layout_engine: &LayoutEngine,
+        node_id: NodeId,
+        tree: &mut LayoutTree,
+    ) {
+        if let Some(layout_node) = self.create_layout_node(document, layout_engine, node_id) {
+            tree.add_node(layout_node);
+        }
+
+        for child in document.get_children(node_id) {
+            self.build_layout_tree(document, layout_engine, child, tree);
+        }
+    }
+
+    fn create_layout_node(
+        &self,
+        document: &Document,
+        layout_engine: &LayoutEngine,
+        node_id: NodeId,
+    ) -> Option<LayoutNode> {
+        let layout_box = layout_engine.get_layout_box(node_id)?;
+
+        if layout_box.content_width <= 0.0 && layout_box.content_height <= 0.0 {
+            return None;
+        }
+
+        let node_ref = document.get_node(node_id)?;
+        let node = node_ref.read();
+
+        match node.node_type {
+            DomNodeType::Document | DomNodeType::DocumentType | DomNodeType::Comment => {
+                return None
+            }
+            _ => {}
+        }
+
+        let computed_styles = self.style_engine.get_computed_styles(node_id);
+        let computed_ref = computed_styles.as_deref();
+
+        let mut element_type = self.determine_element_type(node.node_type, computed_ref)?;
+
+        if node.node_type == DomNodeType::Element && node.tag_name.eq_ignore_ascii_case("img") {
+            element_type = ElementType::Image;
+        }
+
+        let mut style = self.extract_style(computed_ref);
+
+        let text_content = if node.node_type == DomNodeType::Text {
+            let text = node.get_text_content();
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            Some(trimmed.to_string())
+        } else {
+            None
+        };
+
+        if matches!(element_type, ElementType::Text) {
+            // For text nodes, prefer inheriting color/family while keeping transparent background.
+            style.background_color = None;
+        }
+
+        let image_url = if node.node_type == DomNodeType::Element
+            && node.tag_name.eq_ignore_ascii_case("img")
+        {
+            node.get_attribute("src")
+        } else {
+            None
+        };
+
+        Some(LayoutNode {
+            node_id,
+            bounds: Rect {
+                x: layout_box.content_x,
+                y: layout_box.content_y,
+                width: layout_box.content_width.max(0.0),
+                height: layout_box.content_height.max(0.0),
+            },
+            element_type,
+            style,
+            text_content,
+            image_url,
+        })
+    }
+
+    fn determine_element_type(
+        &self,
+        node_type: DomNodeType,
+        computed: Option<&ComputedStyles>,
+    ) -> Option<ElementType> {
+        match node_type {
+            DomNodeType::Document | DomNodeType::DocumentType | DomNodeType::Comment => None,
+            DomNodeType::Text => Some(ElementType::Text),
+            DomNodeType::Element => {
+                let display = computed.and_then(|styles| styles.get_computed_value("display").ok());
+
+                match display {
+                    Some(ComputedValue::Keyword(keyword)) => {
+                        match keyword.to_lowercase().as_str() {
+                            "none" => None,
+                            "inline" | "inline-block" | "inline-flex" | "inline-grid" => {
+                                Some(ElementType::Inline)
+                            }
+                            "list-item" | "block" | "flex" | "grid" | "table" | "table-row"
+                            | "table-cell" => Some(ElementType::Block),
+                            _ => Some(ElementType::Block),
+                        }
+                    }
+                    _ => Some(ElementType::Block),
+                }
+            }
+        }
+    }
+
+    fn extract_style(&self, computed: Option<&ComputedStyles>) -> Style {
+        let mut style = Style::default();
+
+        if let Some(computed) = computed {
+            if let Ok(value) = computed.get_computed_value("background-color") {
+                if let Some(color) = Self::computed_value_to_color(&value) {
+                    if color != "transparent" {
+                        style.background_color = Some(color);
+                    }
+                }
+            }
+
+            if let Ok(value) = computed.get_computed_value("color") {
+                if let Some(color) = Self::computed_value_to_color(&value) {
+                    style.color = Some(color);
+                }
+            }
+
+            if let Ok(value) = computed.get_computed_value("font-size") {
+                if let Some(size) = value.to_f32() {
+                    style.font_size = size.max(1.0);
+                }
+            }
+
+            if let Ok(value) = computed.get_computed_value("font-family") {
+                if let Some(family) = Self::computed_value_to_string(&value) {
+                    style.font_family = Some(family);
+                }
+            }
+        }
+
+        style
+    }
+
+    fn computed_value_to_string(value: &ComputedValue) -> Option<String> {
+        match value {
+            ComputedValue::String(s) | ComputedValue::Keyword(s) => Some(s.clone()),
+            ComputedValue::List(values) => {
+                let families: Vec<_> = values
+                    .iter()
+                    .filter_map(Self::computed_value_to_string)
+                    .collect();
+                if families.is_empty() {
+                    None
+                } else {
+                    Some(families.join(", "))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn computed_value_to_color(value: &ComputedValue) -> Option<String> {
+        match value {
+            ComputedValue::Color(color) => Some(Self::color_to_css(color)),
+            ComputedValue::Keyword(keyword) if keyword.eq_ignore_ascii_case("transparent") => {
+                Some("transparent".to_string())
+            }
+            ComputedValue::Keyword(keyword) => Some(keyword.clone()),
+            ComputedValue::String(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    fn color_to_css(color: &Color) -> String {
+        if (color.a - 1.0).abs() < f32::EPSILON {
+            format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+        } else {
+            format!("rgba({},{},{},{:.3})", color.r, color.g, color.b, color.a)
+        }
     }
 
     async fn emit_event(&self, event: BrowserEvent) {

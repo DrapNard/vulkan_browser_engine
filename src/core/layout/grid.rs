@@ -204,6 +204,14 @@ pub struct GridLayout {
     cache: Arc<dashmap::DashMap<NodeId, GridContainer>>,
 }
 
+struct GridSizingContext<'a> {
+    constraints: &'a LayoutConstraints,
+    document: &'a Document,
+    style_engine: &'a StyleEngine,
+    layout_engine: &'a LayoutEngine,
+    generation: u64,
+}
+
 impl Default for GridLayout {
     fn default() -> Self {
         Self::new()
@@ -241,16 +249,16 @@ impl GridLayout {
 
         self.place_grid_items(&mut grid_container, &mut grid_items)?;
 
-        self.size_grid_tracks(
-            &mut grid_container,
-            &grid_items,
-            &constraints,
+        let sizing_context = GridSizingContext {
+            constraints: &constraints,
             document,
             style_engine,
             layout_engine,
             generation,
-        )
-        .await?;
+        };
+
+        self.size_grid_tracks(&mut grid_container, &grid_items, sizing_context)
+            .await?;
 
         self.align_and_position_items(
             &grid_container,
@@ -286,37 +294,43 @@ impl GridLayout {
         &self,
         styles: &ComputedStyles,
     ) -> std::result::Result<GridContainer, LayoutError> {
-        let mut container = GridContainer::default();
-
-        container.row_gap = match styles.get_computed_value("row-gap") {
-            Ok(ComputedValue::Length(v)) => v,
-            _ => 0.0,
-        };
-        container.column_gap = match styles.get_computed_value("column-gap") {
+        let base_row_gap = match styles.get_computed_value("row-gap") {
             Ok(ComputedValue::Length(v)) => v,
             _ => 0.0,
         };
 
-        if let Ok(gap) = styles.get_computed_value("gap") {
-            if let ComputedValue::Length(gap_val) = gap {
-                if container.row_gap == 0.0 {
-                    container.row_gap = gap_val;
-                }
-                if container.column_gap == 0.0 {
-                    container.column_gap = gap_val;
-                }
-            }
-        }
+        let base_column_gap = match styles.get_computed_value("column-gap") {
+            Ok(ComputedValue::Length(v)) => v,
+            _ => 0.0,
+        };
 
-        container.justify_items = self.parse_justify_items(styles)?;
-        container.align_items = self.parse_align_items(styles)?;
-        container.justify_content = self.parse_justify_content(styles)?;
-        container.align_content = self.parse_align_content(styles)?;
+        let (row_gap, column_gap) = match styles.get_computed_value("gap") {
+            Ok(ComputedValue::Length(gap_val)) => (
+                if base_row_gap == 0.0 {
+                    gap_val
+                } else {
+                    base_row_gap
+                },
+                if base_column_gap == 0.0 {
+                    gap_val
+                } else {
+                    base_column_gap
+                },
+            ),
+            _ => (base_row_gap, base_column_gap),
+        };
 
-        container.auto_flow = self.parse_grid_auto_flow(styles)?;
-        container.dense = self.parse_grid_auto_flow_dense(styles);
-
-        Ok(container)
+        Ok(GridContainer {
+            row_gap,
+            column_gap,
+            justify_items: self.parse_justify_items(styles)?,
+            align_items: self.parse_align_items(styles)?,
+            justify_content: self.parse_justify_content(styles)?,
+            align_content: self.parse_align_content(styles)?,
+            auto_flow: self.parse_grid_auto_flow(styles)?,
+            dense: self.parse_grid_auto_flow_dense(styles),
+            ..GridContainer::default()
+        })
     }
 
     fn parse_justify_items(
@@ -508,11 +522,11 @@ impl GridLayout {
         }
 
         if let Ok(value) = styles.get_computed_value("grid-auto-rows") {
-            container.implicit_row_size = self.parse_track_size(&value)?;
+            container.implicit_row_size = Self::parse_track_size(&value)?;
         }
 
         if let Ok(value) = styles.get_computed_value("grid-auto-columns") {
-            container.implicit_column_size = self.parse_track_size(&value)?;
+            container.implicit_column_size = Self::parse_track_size(&value)?;
         }
 
         Ok(())
@@ -527,7 +541,7 @@ impl GridLayout {
         match value {
             ComputedValue::List(values) => {
                 for val in values {
-                    let size = self.parse_track_size(val)?;
+                    let size = Self::parse_track_size(val)?;
                     tracks.push(GridTrack {
                         size,
                         ..GridTrack::default()
@@ -535,7 +549,7 @@ impl GridLayout {
                 }
             }
             _ => {
-                let size = self.parse_track_size(value)?;
+                let size = Self::parse_track_size(value)?;
                 tracks.push(GridTrack {
                     size,
                     ..GridTrack::default()
@@ -546,10 +560,7 @@ impl GridLayout {
         Ok(tracks)
     }
 
-    fn parse_track_size(
-        &self,
-        value: &ComputedValue,
-    ) -> std::result::Result<TrackSize, LayoutError> {
+    fn parse_track_size(value: &ComputedValue) -> std::result::Result<TrackSize, LayoutError> {
         match value {
             ComputedValue::Length(length) => Ok(TrackSize::Length(*length)),
             ComputedValue::Percentage(percentage) => Ok(TrackSize::Percentage(*percentage)),
@@ -572,8 +583,8 @@ impl GridLayout {
             ComputedValue::Function { name, args } => match name.as_str() {
                 "minmax" => {
                     if args.len() == 2 {
-                        let min_size = self.parse_track_size(&args[0])?;
-                        let max_size = self.parse_track_size(&args[1])?;
+                        let min_size = Self::parse_track_size(&args[0])?;
+                        let max_size = Self::parse_track_size(&args[1])?;
                         Ok(TrackSize::MinMax(Box::new(min_size), Box::new(max_size)))
                     } else {
                         Ok(TrackSize::Auto)
@@ -581,7 +592,7 @@ impl GridLayout {
                 }
                 "fit-content" => {
                     if args.len() == 1 {
-                        let size = self.parse_track_size(&args[0])?;
+                        let size = Self::parse_track_size(&args[0])?;
                         Ok(TrackSize::FitContent(Box::new(size)))
                     } else {
                         Ok(TrackSize::Auto)
@@ -618,16 +629,20 @@ impl GridLayout {
         container: &GridContainer,
         _placement_grid: &PlacementGrid,
     ) -> std::result::Result<ResolvedGridArea, LayoutError> {
-        let mut resolved = ResolvedGridArea::default();
-
-        resolved.row_start =
-            self.resolve_grid_line(&area.row_start, container.row_tracks.len(), true)?;
-        resolved.row_end =
-            self.resolve_grid_line(&area.row_end, container.row_tracks.len(), true)?;
-        resolved.column_start =
-            self.resolve_grid_line(&area.column_start, container.column_tracks.len(), false)?;
-        resolved.column_end =
-            self.resolve_grid_line(&area.column_end, container.column_tracks.len(), false)?;
+        let mut resolved = ResolvedGridArea {
+            row_start: self.resolve_grid_line(&area.row_start, container.row_tracks.len(), true)?,
+            row_end: self.resolve_grid_line(&area.row_end, container.row_tracks.len(), true)?,
+            column_start: self.resolve_grid_line(
+                &area.column_start,
+                container.column_tracks.len(),
+                false,
+            )?,
+            column_end: self.resolve_grid_line(
+                &area.column_end,
+                container.column_tracks.len(),
+                false,
+            )?,
+        };
 
         if resolved.row_start >= resolved.row_end {
             resolved.row_end = resolved.row_start + 1;
@@ -682,27 +697,19 @@ impl GridLayout {
         &self,
         container: &mut GridContainer,
         items: &[GridItem],
-        constraints: &LayoutConstraints,
-        document: &Document,
-        style_engine: &StyleEngine,
-        layout_engine: &LayoutEngine,
-        generation: u64,
+        context: GridSizingContext<'_>,
     ) -> std::result::Result<(), LayoutError> {
-        let available_width = constraints.available_width.unwrap_or(f32::INFINITY);
-        let available_height = constraints.available_height.unwrap_or(f32::INFINITY);
+        let available_width = context.constraints.available_width.unwrap_or(f32::INFINITY);
+        let available_height = context
+            .constraints
+            .available_height
+            .unwrap_or(f32::INFINITY);
 
         self.initialize_track_sizes(&mut container.column_tracks, available_width);
         self.initialize_track_sizes(&mut container.row_tracks, available_height);
 
-        self.resolve_intrinsic_track_sizes(
-            container,
-            items,
-            document,
-            style_engine,
-            layout_engine,
-            generation,
-        )
-        .await?;
+        self.resolve_intrinsic_track_sizes(container, items, &context)
+            .await?;
 
         self.maximize_tracks(&mut container.column_tracks);
         self.maximize_tracks(&mut container.row_tracks);
@@ -760,22 +767,20 @@ impl GridLayout {
         &self,
         container: &mut GridContainer,
         items: &[GridItem],
-        document: &Document,
-        style_engine: &StyleEngine,
-        layout_engine: &LayoutEngine,
-        generation: u64,
+        context: &GridSizingContext<'_>,
     ) -> std::result::Result<(), LayoutError> {
         // Simplified intrinsic sizing - real implementation would be more comprehensive
         for item in items {
             let constraints = LayoutConstraints::default();
 
-            if let Ok(layout_result) = layout_engine
+            if let Ok(layout_result) = context
+                .layout_engine
                 .layout_node_public(
                     item.node_id,
                     constraints,
-                    document,
-                    style_engine,
-                    generation,
+                    context.document,
+                    context.style_engine,
+                    context.generation,
                 )
                 .await
             {

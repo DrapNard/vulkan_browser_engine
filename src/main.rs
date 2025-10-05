@@ -181,12 +181,13 @@ fn do_render_tick() -> std::time::Duration {
 
 fn setup_signal_handlers(rt: &Runtime) {
     // Fire-and-forget task on the same runtime
-    let _ = rt.spawn(async {
+    let signal_task = rt.spawn(async {
         if let Ok(()) = signal::ctrl_c().await {
             info!("Received SIGINT, shutting down gracefully");
             std::process::exit(0);
         }
     });
+    drop(signal_task);
 }
 
 async fn handle_window_resize(

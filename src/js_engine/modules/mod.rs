@@ -121,10 +121,12 @@ impl ModuleSystem {
         if line.starts_with("import ") {
             if let Some(from_pos) = line.find(" from ") {
                 let spec_part = &line[from_pos + 6..].trim();
-                if spec_part.starts_with('"') && spec_part.ends_with('"') {
-                    return Some(spec_part[1..spec_part.len() - 1].to_string());
-                } else if spec_part.starts_with('\'') && spec_part.ends_with('\'') {
-                    return Some(spec_part[1..spec_part.len() - 1].to_string());
+                if spec_part.len() >= 2 {
+                    let bytes = spec_part.as_bytes();
+                    let quote = bytes[0];
+                    if (quote == b'"' || quote == b'\'') && bytes.last() == Some(&quote) {
+                        return Some(spec_part[1..spec_part.len() - 1].to_string());
+                    }
                 }
             }
         }

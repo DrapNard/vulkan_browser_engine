@@ -191,7 +191,7 @@ unsafe impl Sync for RuntimeCore {}
 
 pub struct JSRuntime {
     core: Arc<Mutex<RuntimeCore>>,
-    jit_compiler: Arc<JITCompiler>,
+    jit_compiler: JITCompiler,
     garbage_collector: Arc<AsyncMutex<GarbageCollector>>,
     #[allow(dead_code)]
     heap_manager: Arc<HeapManager>,
@@ -225,11 +225,9 @@ impl JSRuntime {
             OptimizationLevel::None
         };
 
-        let jit_compiler = Arc::new(
-            JITCompiler::new(optimization_level)
-                .await
-                .map_err(|e| JSError::JIT(format!("JIT compiler initialization failed: {}", e)))?,
-        );
+        let jit_compiler = JITCompiler::new(optimization_level)
+            .await
+            .map_err(|e| JSError::JIT(format!("JIT compiler initialization failed: {}", e)))?;
 
         let heap_manager = Arc::new(HeapManager::new());
         let garbage_collector = Arc::new(AsyncMutex::new(GarbageCollector::new()));
@@ -324,16 +322,14 @@ impl JSRuntime {
                 .await;
         }
 
-        let result = {
-            let mut core = self.core.lock();
-
-            if let Some(jit_function) = self.get_jit_compiled_function(script_hash).await {
-                self.execute_jit_function(&jit_function, context_id).await
-            } else {
-                core.v8_runtime
-                    .execute(script)
-                    .map_err(|e| JSError::Execution(e.to_string()))
-            }
+        let result = if let Some(jit_function) = self.get_jit_compiled_function(script_hash).await {
+            self.execute_jit_function(&jit_function, context_id).await
+        } else {
+            self.core
+                .lock()
+                .v8_runtime
+                .execute(script)
+                .map_err(|e| JSError::Execution(e.to_string()))
         }?;
 
         self.update_context_usage(context_id).await;

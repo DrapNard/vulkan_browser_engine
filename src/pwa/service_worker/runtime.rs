@@ -6,7 +6,6 @@ use crate::BrowserConfig;
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -23,7 +22,7 @@ pub struct ServiceWorkerConfig {
 }
 
 pub struct ServiceWorkerRuntime {
-    workers: Arc<RwLock<HashMap<String, WorkerInstance>>>,
+    workers: RwLock<HashMap<String, WorkerInstance>>,
     http_client: reqwest::Client,
     config: ServiceWorkerConfig,
 }
@@ -83,7 +82,7 @@ impl ServiceWorkerRuntime {
             .map_err(|e| ServiceWorkerError::NetworkError(e.to_string()))?;
 
         Ok(Self {
-            workers: Arc::new(RwLock::new(HashMap::new())),
+            workers: RwLock::new(HashMap::new()),
             http_client,
             config,
         })
