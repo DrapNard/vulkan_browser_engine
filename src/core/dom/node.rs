@@ -108,7 +108,6 @@ impl AttributeMap {
 #[derive(Debug, Clone)]
 pub struct ComputedStyle {
     properties: SmallVec<[(String, String); 16]>,
-    cascaded_properties: HashMap<String, Vec<(String, u32)>>,
     inherited_properties: SmallVec<[String; 8]>,
     is_dirty: bool,
     parent_style: Option<Arc<ComputedStyle>>,
@@ -124,7 +123,6 @@ impl ComputedStyle {
     pub fn new() -> Self {
         Self {
             properties: SmallVec::new(),
-            cascaded_properties: HashMap::new(),
             inherited_properties: SmallVec::new(),
             is_dirty: true,
             parent_style: None,

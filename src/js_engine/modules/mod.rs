@@ -33,7 +33,9 @@ pub enum ModuleExport {
 }
 
 pub struct ModuleLoader {
+    #[allow(dead_code)]
     base_url: String,
+    #[allow(dead_code)]
     allowed_schemes: Vec<String>,
 }
 
@@ -219,8 +221,10 @@ pub struct ModuleGraph {
 }
 
 struct ModuleNode {
+    #[allow(dead_code)]
     id: String,
     dependencies: Vec<String>,
+    #[allow(dead_code)]
     dependents: Vec<String>,
 }
 

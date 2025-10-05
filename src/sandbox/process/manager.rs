@@ -31,6 +31,7 @@ struct ResourceMonitor {
 struct CleanupScheduler {
     cleanup_interval: Duration,
     max_terminated_age: Duration,
+    #[allow(dead_code)]
     event_sender: mpsc::UnboundedSender<ProcessEvent>,
 }
 
@@ -38,6 +39,7 @@ struct CleanupScheduler {
 struct ResourceThresholds {
     memory_warning_percent: f64,
     cpu_warning_percent: f64,
+    #[allow(dead_code)]
     file_handle_warning_percent: f64,
 }
 

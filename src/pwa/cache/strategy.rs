@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;

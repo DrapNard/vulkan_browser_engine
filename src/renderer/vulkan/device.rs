@@ -79,7 +79,7 @@ impl VulkanDevice {
 
         let capabilities = Self::query_device_capabilities(instance, physical_device)?;
 
-        let (logical_device, queues) =
+        let (logical_device, queues, enabled_extensions) =
             Self::create_logical_device(instance, physical_device, queue_families, &capabilities)?;
 
         let memory_properties =
@@ -87,7 +87,12 @@ impl VulkanDevice {
 
         let device_properties = unsafe { instance.get_physical_device_properties(physical_device) };
 
-        Ok(Self {
+        let enabled_extension_set = enabled_extensions
+            .iter()
+            .map(|ext| ext.to_string_lossy().into_owned())
+            .collect::<HashSet<_>>();
+
+        let device = Self {
             physical_device,
             logical_device,
             graphics_queue: queues.0,
@@ -98,21 +103,15 @@ impl VulkanDevice {
             capabilities,
             memory_properties,
             device_properties,
-            enabled_extensions: Arc::new(RwLock::new(HashSet::new())),
-        })
-    }
+            enabled_extensions: Arc::new(RwLock::new(enabled_extension_set)),
+        };
 
-    fn check_device_suitability(
-        _entry: &Entry,
-        instance: &Instance,
-        device: vk::PhysicalDevice,
-        surface: vk::SurfaceKHR,
-        surface_loader: &Surface,
-    ) -> Result<bool> {
-        let _queue_families = Self::find_queue_families(instance, device, surface, surface_loader)?;
-        let _features = unsafe { instance.get_physical_device_features(device) };
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(!device.enabled_extensions().is_empty());
+        }
 
-        Ok(true)
+        Ok(device)
     }
 
     fn select_physical_device(
@@ -290,7 +289,11 @@ impl VulkanDevice {
         physical_device: vk::PhysicalDevice,
         queue_families: QueueFamilyIndices,
         capabilities: &DeviceCapabilities,
-    ) -> Result<(Device, (vk::Queue, vk::Queue, vk::Queue, Option<vk::Queue>))> {
+    ) -> Result<(
+        Device,
+        (vk::Queue, vk::Queue, vk::Queue, Option<vk::Queue>),
+        Vec<&'static CStr>,
+    )> {
         let queue_priorities = [1.0];
 
         let mut queue_create_infos = SmallVec::<[vk::DeviceQueueCreateInfo; 4]>::new();
@@ -437,6 +440,7 @@ impl VulkanDevice {
         Ok((
             device,
             (graphics_queue, compute_queue, transfer_queue, present_queue),
+            extensions,
         ))
     }
 
@@ -449,8 +453,9 @@ impl VulkanDevice {
             ash::extensions::khr::Synchronization2::name(),
             ash::extensions::khr::PushDescriptor::name(),
             // Use raw extension names for extensions not available as separate structs
-            unsafe { c"VK_EXT_descriptor_indexing" },
-            unsafe { c"VK_EXT_shader_viewport_index_layer" },
+            CStr::from_bytes_with_nul(b"VK_EXT_descriptor_indexing\0").expect("static string"),
+            CStr::from_bytes_with_nul(b"VK_EXT_shader_viewport_index_layer\0")
+                .expect("static string"),
         ]
     }
 
@@ -504,6 +509,10 @@ impl VulkanDevice {
 
     pub fn capabilities(&self) -> &DeviceCapabilities {
         &self.capabilities
+    }
+
+    pub fn enabled_extensions(&self) -> Vec<String> {
+        self.enabled_extensions.read().iter().cloned().collect()
     }
 
     pub fn memory_properties(&self) -> &vk::PhysicalDeviceMemoryProperties {

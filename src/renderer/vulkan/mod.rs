@@ -1,9 +1,9 @@
 use ash::vk;
 use ash::{Device, Entry, Instance};
 use dashmap::DashMap;
-use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use smallvec::SmallVec;
+use std::ffi::CStr;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -13,7 +13,7 @@ pub mod shaders;
 
 use command::{CommandError, CommandManager};
 use device::{DeviceError, VulkanDevice};
-use shaders::{ShaderError, ShaderManager};
+use shaders::ShaderError;
 
 use crate::core::{dom::Document, layout::LayoutEngine};
 use crate::BrowserConfig;
@@ -102,23 +102,6 @@ impl MemoryTracker {
         }
     }
 
-    fn allocate(&self, bytes: u64) {
-        let current = self
-            .allocated_bytes
-            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed)
-            + bytes;
-        let peak = self.peak_bytes.load(std::sync::atomic::Ordering::Relaxed);
-        if current > peak {
-            self.peak_bytes
-                .store(current, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    fn deallocate(&self, bytes: u64) {
-        self.allocated_bytes
-            .fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
-    }
-
     fn current_usage(&self) -> u64 {
         self.allocated_bytes
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -132,10 +115,6 @@ impl MemoryTracker {
 struct ResourceManager {
     pipelines: DashMap<u64, vk::Pipeline>,
     descriptor_set_layouts: DashMap<String, vk::DescriptorSetLayout>,
-    uniform_buffers: DashMap<String, (vk::Buffer, gpu_allocator::vulkan::Allocation)>,
-    vertex_buffers: DashMap<u64, (vk::Buffer, gpu_allocator::vulkan::Allocation)>,
-    index_buffers: DashMap<u64, (vk::Buffer, gpu_allocator::vulkan::Allocation)>,
-    textures: DashMap<u64, (vk::Image, vk::ImageView, gpu_allocator::vulkan::Allocation)>,
 }
 
 impl ResourceManager {
@@ -143,10 +122,6 @@ impl ResourceManager {
         Self {
             pipelines: DashMap::with_capacity(64),
             descriptor_set_layouts: DashMap::with_capacity(32),
-            uniform_buffers: DashMap::with_capacity(128),
-            vertex_buffers: DashMap::with_capacity(256),
-            index_buffers: DashMap::with_capacity(256),
-            textures: DashMap::with_capacity(512),
         }
     }
 
@@ -161,16 +136,13 @@ impl ResourceManager {
 }
 
 pub struct VulkanRenderer {
-    entry: Entry,
     instance: Instance,
     device: Arc<VulkanDevice>,
-    allocator: Arc<Mutex<Allocator>>,
     surface: vk::SurfaceKHR,
     surface_loader: ash::extensions::khr::Surface,
     swapchain_loader: ash::extensions::khr::Swapchain,
     swapchain_data: Arc<RwLock<SwapchainData>>,
     command_manager: Arc<CommandManager>,
-    shader_manager: Arc<ShaderManager>,
     render_pass: vk::RenderPass,
     pipeline_cache: vk::PipelineCache,
     descriptor_pool: vk::DescriptorPool,
@@ -193,11 +165,9 @@ impl VulkanRenderer {
         let device =
             Arc::new(VulkanDevice::new(&entry, &instance, surface, &surface_loader).await?);
 
-        let allocator = Self::create_allocator(&instance, &device)?;
         let swapchain_loader =
             ash::extensions::khr::Swapchain::new(&instance, device.logical_device());
         let command_manager = Arc::new(CommandManager::new(device.clone()).await?);
-        let shader_manager = Arc::new(ShaderManager::new(device.clone()).await?);
 
         let render_pass = Self::create_render_pass(device.logical_device())?;
         let pipeline_cache = Self::create_pipeline_cache(device.logical_device())?;
@@ -217,16 +187,13 @@ impl VulkanRenderer {
         }));
 
         Ok(Self {
-            entry,
             instance,
             device,
-            allocator,
             surface,
             surface_loader,
             swapchain_loader,
             swapchain_data,
             command_manager,
-            shader_manager,
             render_pass,
             pipeline_cache,
             descriptor_pool,
@@ -238,37 +205,16 @@ impl VulkanRenderer {
         })
     }
 
-    fn create_allocator(
-        instance: &Instance,
-        device: &Arc<VulkanDevice>,
-    ) -> Result<Arc<Mutex<Allocator>>> {
-        let allocator_desc = AllocatorCreateDesc {
-            instance: instance.clone(),
-            device: device.logical_device().clone(),
-            physical_device: device.physical_device(),
-            debug_settings: gpu_allocator::AllocatorDebugSettings {
-                log_memory_information: cfg!(debug_assertions),
-                log_leaks_on_shutdown: cfg!(debug_assertions),
-                store_stack_traces: false,
-                log_allocations: false,
-                log_frees: false,
-                log_stack_traces: false,
-            },
-            buffer_device_address: device.capabilities().supports_timeline_semaphores,
-            allocation_sizes: gpu_allocator::AllocationSizes::default(),
-        };
-
-        let allocator = Allocator::new(&allocator_desc)
-            .map_err(|e| VulkanError::MemoryAllocation(e.to_string()))?;
-
-        Ok(Arc::new(Mutex::new(allocator)))
-    }
-
     fn create_instance(entry: &Entry) -> Result<Instance> {
+        let app_name =
+            CStr::from_bytes_with_nul(b"Vulkan Browser\0").expect("static application name");
+        let engine_name =
+            CStr::from_bytes_with_nul(b"VulkanBrowserEngine\0").expect("static engine name");
+
         let app_info = vk::ApplicationInfo::builder()
-            .application_name(unsafe { c"Vulkan Browser" })
+            .application_name(app_name)
             .application_version(vk::make_api_version(0, 1, 0, 0))
-            .engine_name(unsafe { c"VulkanBrowserEngine" })
+            .engine_name(engine_name)
             .engine_version(vk::make_api_version(0, 1, 0, 0))
             .api_version(vk::API_VERSION_1_3);
 
@@ -278,7 +224,9 @@ impl VulkanRenderer {
 
         if cfg!(debug_assertions) {
             extension_names.push(ash::extensions::ext::DebugUtils::name().as_ptr());
-            layer_names.push(unsafe { c"VK_LAYER_KHRONOS_validation".as_ptr() });
+            let validation_layer = CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0")
+                .expect("validation layer name");
+            layer_names.push(validation_layer.as_ptr());
         }
 
         let create_info = vk::InstanceCreateInfo::builder()

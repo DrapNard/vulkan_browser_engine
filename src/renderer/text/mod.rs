@@ -126,7 +126,12 @@ impl TextRenderer {
         };
 
         let rgba_color = self.parse_color(color.as_ref().unwrap_or(&"#000000".to_string()));
-        let scale = Scale::uniform(font_size);
+        let effective_font_size = if font_size.is_finite() && font_size > 0.0 {
+            font_size
+        } else {
+            self.default_font_size
+        };
+        let scale = Scale::uniform(effective_font_size);
 
         let glyphs = self.layout_text(text, &font, scale, bounds)?;
         let vertices = self.create_text_vertices(&glyphs, rgba_color)?;

@@ -1,8 +1,12 @@
+pub mod policy;
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
+use tokio::time::sleep;
+use tracing::debug;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,7 +181,7 @@ struct QuarantinePolicy {
     duration: Option<Duration>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum AlertChannel {
     Email(String),
     Webhook(String),
@@ -210,6 +214,7 @@ struct NotificationRecord {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum ComplianceStatus {
     Compliant,
     NonCompliant,
@@ -218,6 +223,7 @@ enum ComplianceStatus {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ComplianceEvent {
     timestamp: u64,
     framework: ComplianceFramework,
@@ -228,6 +234,7 @@ struct ComplianceEvent {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ComplianceViolation {
     timestamp: u64,
     process_id: u32,
@@ -239,6 +246,7 @@ struct ComplianceViolation {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct RemediationAction {
     action_type: String,
     automated: bool,
@@ -268,12 +276,14 @@ struct IncidentResponder {
 struct ComplianceMonitor {
     compliance_frameworks: Vec<ComplianceFramework>,
     audit_trail: Arc<RwLock<Vec<ComplianceEvent>>>,
+    #[allow(dead_code)]
     violation_tracker: ViolationTracker,
 }
 
 struct AnomalyDetector {
     baseline_models: HashMap<u32, ProcessBaseline>,
     anomaly_threshold: f64,
+    #[allow(dead_code)]
     learning_enabled: bool,
 }
 
@@ -291,9 +301,10 @@ struct QuarantineManager {
 struct AlertSystem {
     alert_channels: Vec<AlertChannel>,
     escalation_rules: Vec<EscalationRule>,
-    notification_history: Vec<NotificationRecord>,
+    notification_history: Arc<RwLock<Vec<NotificationRecord>>>,
 }
 
+#[allow(dead_code)]
 struct ViolationTracker {
     violations_by_process: HashMap<u32, Vec<ComplianceViolation>>,
     violation_patterns: HashMap<String, u32>,
@@ -446,8 +457,16 @@ impl ThreatDetector {
 
         for rule in &self.detection_rules {
             if rule.enabled && Self::matches_pattern(&rule.pattern, event) {
-                threat_score += Self::calculate_rule_score(rule);
+                let severity_weight = Self::rule_severity_weight(rule.severity);
+                threat_score += Self::calculate_rule_score(rule) * severity_weight;
                 matched_rules.push(rule.id.clone());
+                debug!(
+                    target: "sandbox::security",
+                    "Detection rule matched: {} ({}) with severity {:?}",
+                    rule.id,
+                    rule.name,
+                    rule.severity
+                );
             }
         }
 
@@ -474,6 +493,16 @@ impl ThreatDetector {
         rule.base_score * (1.0 - rule.false_positive_rate)
     }
 
+    fn rule_severity_weight(severity: SecuritySeverity) -> f64 {
+        match severity {
+            SecuritySeverity::Critical => 1.5,
+            SecuritySeverity::High => 1.2,
+            SecuritySeverity::Medium => 1.0,
+            SecuritySeverity::Low => 0.7,
+            SecuritySeverity::Info => 0.4,
+        }
+    }
+
     fn calculate_confidence(threat_score: f64, matched_rules: &[String]) -> f64 {
         let rule_confidence = if matched_rules.is_empty() { 0.0 } else { 0.8 };
         (rule_confidence + threat_score) / 2.0
@@ -482,26 +511,116 @@ impl ThreatDetector {
 
 impl AnomalyDetector {
     fn new() -> Self {
+        let mut baseline_models = HashMap::new();
+        baseline_models.insert(
+            0,
+            ProcessBaseline {
+                normal_memory_usage: 64.0 * 1024.0 * 1024.0,
+                normal_cpu_usage: 0.25,
+                normal_network_activity: 512.0 * 1024.0,
+                normal_file_operations: 128.0,
+                confidence_level: 0.5,
+            },
+        );
+
         Self {
-            baseline_models: HashMap::new(),
+            baseline_models,
             anomaly_threshold: 0.7,
             learning_enabled: true,
         }
     }
 
     async fn calculate_anomaly_score(&self, event: &SecurityEvent) -> f64 {
-        self.baseline_models
+        let baseline_score = self
+            .baseline_models
             .get(&event.source_process)
-            .map(Self::compare_to_baseline)
-            .unwrap_or(0.0)
+            .or_else(|| self.baseline_models.get(&0))
+            .map(|baseline| Self::compare_to_baseline(baseline, event))
+            .unwrap_or(0.0);
+
+        if baseline_score > self.anomaly_threshold {
+            debug!(
+                target: "sandbox::security",
+                "Anomaly detector triggered for process {} with score {:.2}",
+                event.source_process,
+                baseline_score
+            );
+        }
+
+        baseline_score
     }
 
-    fn compare_to_baseline(_baseline: &ProcessBaseline) -> f64 {
-        0.0
+    fn compare_to_baseline(baseline: &ProcessBaseline, event: &SecurityEvent) -> f64 {
+        let memory_usage = event
+            .details
+            .get("memory_usage_bytes")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(baseline.normal_memory_usage);
+        let cpu_usage = event
+            .details
+            .get("cpu_usage_percent")
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|v| v / 100.0)
+            .unwrap_or(baseline.normal_cpu_usage);
+        let network_activity = event
+            .details
+            .get("network_bytes_sent")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(baseline.normal_network_activity);
+        let file_ops = event
+            .details
+            .get("file_handles_count")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(baseline.normal_file_operations);
+
+        let memory_delta = ((memory_usage - baseline.normal_memory_usage)
+            / baseline.normal_memory_usage.max(1.0))
+        .abs();
+        let cpu_delta =
+            ((cpu_usage - baseline.normal_cpu_usage) / baseline.normal_cpu_usage.max(0.01)).abs();
+        let network_delta = ((network_activity - baseline.normal_network_activity)
+            / baseline.normal_network_activity.max(1.0))
+        .abs();
+        let file_delta = ((file_ops - baseline.normal_file_operations)
+            / baseline.normal_file_operations.max(1.0))
+        .abs();
+
+        let combined_delta = (memory_delta + cpu_delta + network_delta + file_delta) / 4.0
+            * baseline.confidence_level;
+
+        combined_delta.min(1.0)
     }
 
-    async fn get_indicators(&self, _event: &SecurityEvent) -> Vec<String> {
-        Vec::new()
+    async fn get_indicators(&self, event: &SecurityEvent) -> Vec<String> {
+        let mut indicators = Vec::new();
+
+        if let Some(memory) = event
+            .details
+            .get("memory_usage_bytes")
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            if let Some(baseline) = self
+                .baseline_models
+                .get(&event.source_process)
+                .or_else(|| self.baseline_models.get(&0))
+            {
+                if memory > baseline.normal_memory_usage * 1.5 {
+                    indicators.push("memory_spike".to_string());
+                }
+            }
+        }
+
+        if let Some(cpu) = event
+            .details
+            .get("cpu_usage_percent")
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            if cpu > 90.0 {
+                indicators.push("high_cpu_usage".to_string());
+            }
+        }
+
+        indicators
     }
 }
 
@@ -531,16 +650,40 @@ impl BehaviorAnalyzer {
     }
 
     async fn analyze(&self, event: &SecurityEvent) -> BehaviorAnalysis {
-        let current_score = self
+        let base_score = self
             .risk_scores
             .get(&event.source_process)
             .copied()
             .unwrap_or(0.0);
 
+        let mut pattern_matches = Vec::new();
+        let mut indicators = Vec::new();
+        let mut risk_increment = 0.0;
+
+        for pattern in self.behavior_patterns.values() {
+            if pattern
+                .indicators
+                .iter()
+                .any(|indicator| event.details.contains_key(indicator))
+            {
+                pattern_matches.push(pattern.pattern_name.clone());
+                indicators.extend(pattern.indicators.clone());
+
+                let window_ratio =
+                    pattern.time_window.as_secs_f64() / self.analysis_window.as_secs_f64().max(1.0);
+                risk_increment += pattern.risk_weight * window_ratio.min(1.0);
+            }
+        }
+
+        indicators.sort();
+        indicators.dedup();
+
+        let risk_score = (base_score + risk_increment).min(1.0);
+
         BehaviorAnalysis {
-            risk_score: current_score,
-            behavioral_indicators: Vec::new(),
-            pattern_matches: Vec::new(),
+            risk_score,
+            behavioral_indicators: indicators,
+            pattern_matches,
         }
     }
 }
@@ -645,17 +788,82 @@ impl QuarantineManager {
             },
         );
 
+        policies.insert(
+            ThreatLevel::High,
+            QuarantinePolicy {
+                isolation_level: IsolationLevel::NetworkOnly,
+                resource_limits: QuarantineResourceLimits {
+                    max_memory: 128 * 1024 * 1024,
+                    max_cpu: 20,
+                    max_network_bandwidth: 128 * 1024,
+                    max_file_operations: 128,
+                },
+                network_isolation: true,
+                file_system_isolation: true,
+                duration: Some(Duration::from_secs(600)),
+            },
+        );
+
+        policies.insert(
+            ThreatLevel::Medium,
+            QuarantinePolicy {
+                isolation_level: IsolationLevel::FileSystemOnly,
+                resource_limits: QuarantineResourceLimits {
+                    max_memory: 256 * 1024 * 1024,
+                    max_cpu: 40,
+                    max_network_bandwidth: 512 * 1024,
+                    max_file_operations: 512,
+                },
+                network_isolation: false,
+                file_system_isolation: true,
+                duration: Some(Duration::from_secs(300)),
+            },
+        );
+
+        policies.insert(
+            ThreatLevel::Low,
+            QuarantinePolicy {
+                isolation_level: IsolationLevel::Suspended,
+                resource_limits: QuarantineResourceLimits {
+                    max_memory: 512 * 1024 * 1024,
+                    max_cpu: 60,
+                    max_network_bandwidth: 1024 * 1024,
+                    max_file_operations: 1024,
+                },
+                network_isolation: false,
+                file_system_isolation: false,
+                duration: Some(Duration::from_secs(120)),
+            },
+        );
+
         policies
     }
 
     async fn quarantine_process(&self, process_id: u32, threat_level: ThreatLevel) {
         let mut quarantined = self.quarantined_processes.write().await;
         quarantined.insert(process_id);
-        tracing::warn!(
-            "Quarantining process {} with threat level {:?}",
-            process_id,
-            threat_level
-        );
+        if let Some(policy) = self.quarantine_policies.get(&threat_level) {
+            tracing::warn!(
+                target: "sandbox::security",
+                "Quarantining process {} with isolation {:?}, limits: memory={} bytes cpu={}%, net={} bytes/s, file_ops={} (duration={:?}, net_iso={}, fs_iso={})",
+                process_id,
+                policy.isolation_level,
+                policy.resource_limits.max_memory,
+                policy.resource_limits.max_cpu,
+                policy.resource_limits.max_network_bandwidth,
+                policy.resource_limits.max_file_operations,
+                policy.duration,
+                policy.network_isolation,
+                policy.file_system_isolation
+            );
+        } else {
+            tracing::warn!(
+                target: "sandbox::security",
+                "Quarantining process {} with threat level {:?}",
+                process_id,
+                threat_level
+            );
+        }
     }
 
     async fn get_quarantined_count(&self) -> usize {
@@ -666,9 +874,38 @@ impl QuarantineManager {
 impl AlertSystem {
     fn new() -> Self {
         Self {
-            alert_channels: vec![AlertChannel::SystemLog, AlertChannel::Dashboard],
-            escalation_rules: Vec::new(),
-            notification_history: Vec::new(),
+            alert_channels: vec![
+                AlertChannel::SystemLog,
+                AlertChannel::Dashboard,
+                AlertChannel::Email("security@localhost".to_string()),
+                AlertChannel::Webhook("https://hooks.local/security".to_string()),
+                AlertChannel::Sms("+10000000000".to_string()),
+            ],
+            escalation_rules: vec![
+                EscalationRule {
+                    trigger_condition: EscalationTrigger::SeverityLevel(SecuritySeverity::High),
+                    escalation_delay: Duration::from_secs(0),
+                    target_channels: vec![AlertChannel::Email("security@localhost".to_string())],
+                },
+                EscalationRule {
+                    trigger_condition: EscalationTrigger::ThreatScore(0.75),
+                    escalation_delay: Duration::from_secs(30),
+                    target_channels: vec![AlertChannel::SystemLog],
+                },
+                EscalationRule {
+                    trigger_condition: EscalationTrigger::RepeatedViolations(5),
+                    escalation_delay: Duration::from_secs(60),
+                    target_channels: vec![AlertChannel::Dashboard],
+                },
+                EscalationRule {
+                    trigger_condition: EscalationTrigger::TimeWindow(Duration::from_secs(120)),
+                    escalation_delay: Duration::from_secs(0),
+                    target_channels: vec![AlertChannel::Webhook(
+                        "https://hooks.local/escalate".to_string(),
+                    )],
+                },
+            ],
+            notification_history: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -678,8 +915,34 @@ impl AlertSystem {
             threat_level, event.source_process
         );
 
+        let matching_rules = self.matching_escalations(threat_level, event).await;
+        let escalate = !matching_rules.is_empty();
+
         for channel in &self.alert_channels {
             self.send_to_channel(channel, &message).await;
+            self.record_notification(channel.clone(), &message, escalate)
+                .await;
+        }
+
+        if escalate {
+            debug!(
+                target: "sandbox::security",
+                "Escalation triggered for process {} at threat level {:?}",
+                event.source_process,
+                threat_level
+            );
+            self.acknowledge_notifications().await;
+
+            for rule in matching_rules {
+                if !rule.escalation_delay.is_zero() {
+                    sleep(rule.escalation_delay).await;
+                }
+
+                for channel in rule.target_channels {
+                    self.send_to_channel(&channel, &message).await;
+                    self.record_notification(channel, &message, true).await;
+                }
+            }
         }
     }
 
@@ -698,6 +961,78 @@ impl AlertSystem {
             AlertChannel::Sms(number) => {
                 tracing::info!("Sending SMS to {}: {}", number, message);
             }
+        }
+    }
+
+    async fn matching_escalations(
+        &self,
+        threat_level: ThreatLevel,
+        event: &SecurityEvent,
+    ) -> Vec<EscalationRule> {
+        let history = self.notification_history.read().await;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_secs();
+
+        let pending_unacked = history.iter().filter(|record| !record.acknowledged).count() as u32;
+
+        let unique_channels: std::collections::HashSet<_> = history
+            .iter()
+            .filter(|record| !record.acknowledged)
+            .map(|record| record.channel.clone())
+            .collect();
+
+        let unique_messages: std::collections::HashSet<_> = history
+            .iter()
+            .filter(|record| !record.acknowledged)
+            .map(|record| record.message.clone())
+            .collect();
+
+        self.escalation_rules
+            .iter()
+            .filter(|rule| match &rule.trigger_condition {
+                EscalationTrigger::SeverityLevel(min_severity) => {
+                    event.severity <= *min_severity
+                        || matches!(threat_level, ThreatLevel::High | ThreatLevel::Critical)
+                }
+                EscalationTrigger::ThreatScore(threshold) => event.threat_score >= *threshold,
+                EscalationTrigger::RepeatedViolations(limit) => {
+                    pending_unacked >= *limit
+                        || unique_channels.len() as u32 >= *limit
+                        || unique_messages.len() as u32 >= *limit
+                }
+                EscalationTrigger::TimeWindow(window) => history.iter().any(|record| {
+                    let elapsed = now.saturating_sub(record.timestamp);
+                    elapsed <= window.as_secs()
+                }),
+            })
+            .cloned()
+            .collect()
+    }
+
+    async fn record_notification(&self, channel: AlertChannel, message: &str, escalate: bool) {
+        let mut history = self.notification_history.write().await;
+        history.push(NotificationRecord {
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_else(|_| Duration::from_secs(0))
+                .as_secs(),
+            channel,
+            message: message.to_string(),
+            acknowledged: false,
+        });
+
+        if escalate && history.len() > 100 {
+            let drain_until = history.len() - 100;
+            history.drain(0..drain_until);
+        }
+    }
+
+    async fn acknowledge_notifications(&self) {
+        let mut history = self.notification_history.write().await;
+        for record in history.iter_mut() {
+            record.acknowledged = true;
         }
     }
 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::ServiceWorkerError;
 use crate::js_engine::JSRuntime as JsEngine;
 use crate::BrowserConfig;

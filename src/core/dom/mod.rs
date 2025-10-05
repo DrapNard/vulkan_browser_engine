@@ -16,6 +16,7 @@ pub use node::{
 
 use crate::core::dom::document::NodeType as DocumentNodeType;
 use parking_lot::RwLock;
+use std::collections::HashSet;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -193,18 +194,23 @@ impl TreeWalker {
     }
 
     pub fn parent_node(&mut self, document: &Document) -> Option<NodeId> {
-        let p = document.get_parent(self.current_node)?;
-        if self.accepts_node(p) {
-            self.current_node = p;
-            Some(p)
-        } else {
-            None
+        let mut current = document.get_parent(self.current_node)?;
+        while let Some(node) = Some(current) {
+            if self.accepts_node(document, node) {
+                self.current_node = node;
+                return Some(node);
+            }
+            current = match document.get_parent(node) {
+                Some(parent) if parent != self.root => parent,
+                _ => break,
+            };
         }
+        None
     }
 
     pub fn first_child(&mut self, document: &Document) -> Option<NodeId> {
         for &c in &document.get_children(self.current_node) {
-            if self.accepts_node(c) {
+            if self.accepts_node(document, c) {
                 self.current_node = c;
                 return Some(c);
             }
@@ -214,7 +220,7 @@ impl TreeWalker {
 
     pub fn last_child(&mut self, document: &Document) -> Option<NodeId> {
         for &c in document.get_children(self.current_node).iter().rev() {
-            if self.accepts_node(c) {
+            if self.accepts_node(document, c) {
                 self.current_node = c;
                 return Some(c);
             }
@@ -227,7 +233,7 @@ impl TreeWalker {
         let siblings = document.get_children(parent);
         let idx = siblings.iter().position(|&id| id == self.current_node)?;
         for &sib in &siblings[idx + 1..] {
-            if self.accepts_node(sib) {
+            if self.accepts_node(document, sib) {
                 self.current_node = sib;
                 return Some(sib);
             }
@@ -240,7 +246,7 @@ impl TreeWalker {
         let siblings = document.get_children(parent);
         let idx = siblings.iter().position(|&id| id == self.current_node)?;
         for &sib in siblings[..idx].iter().rev() {
-            if self.accepts_node(sib) {
+            if self.accepts_node(document, sib) {
                 self.current_node = sib;
                 return Some(sib);
             }
@@ -285,7 +291,11 @@ impl TreeWalker {
         None
     }
 
-    fn accepts_node(&self, node: NodeId) -> bool {
+    fn accepts_node(&self, document: &Document, node: NodeId) -> bool {
+        if !mask_matches(self.what_to_show, document, node) {
+            return false;
+        }
+
         if let Some(ref f) = self.filter {
             f(node)
         } else {
@@ -304,12 +314,42 @@ impl std::fmt::Debug for TreeWalker {
     }
 }
 
+const SHOW_ALL: u32 = 0xFFFF_FFFF;
+const SHOW_ELEMENT: u32 = 0x0000_0001;
+const SHOW_TEXT: u32 = 0x0000_0004;
+const SHOW_COMMENT: u32 = 0x0000_0080;
+const SHOW_DOCUMENT: u32 = 0x0000_0100;
+const SHOW_DOCUMENT_TYPE: u32 = 0x0000_0200;
+
+fn node_type_mask(document: &Document, node: NodeId) -> Option<u32> {
+    let node_entry = document.get_node(node)?;
+    let node_ref = node_entry.read();
+    Some(match node_ref.node_type {
+        DocumentNodeType::Element => SHOW_ELEMENT,
+        DocumentNodeType::Text => SHOW_TEXT,
+        DocumentNodeType::Comment => SHOW_COMMENT,
+        DocumentNodeType::Document => SHOW_DOCUMENT,
+        DocumentNodeType::DocumentType => SHOW_DOCUMENT_TYPE,
+    })
+}
+
+fn mask_matches(mask: u32, document: &Document, node: NodeId) -> bool {
+    let effective_mask = if mask == 0 { SHOW_ALL } else { mask };
+    if effective_mask == SHOW_ALL {
+        return true;
+    }
+
+    node_type_mask(document, node)
+        .map(|node_mask| (effective_mask & node_mask) != 0)
+        .unwrap_or(false)
+}
+
 pub struct NodeIterator {
     root: NodeId,
     what_to_show: u32,
     filter: Option<Arc<dyn Fn(NodeId) -> bool + Send + Sync>>,
-    reference_node: NodeId,
-    pointer_before_reference_node: bool,
+    traversal: Vec<NodeId>,
+    position: Option<usize>,
 }
 
 impl NodeIterator {
@@ -318,8 +358,8 @@ impl NodeIterator {
             root,
             what_to_show,
             filter: None,
-            reference_node: root,
-            pointer_before_reference_node: true,
+            traversal: Vec::new(),
+            position: None,
         }
     }
 
@@ -328,25 +368,102 @@ impl NodeIterator {
         F: Fn(NodeId) -> bool + Send + Sync + 'static,
     {
         self.filter = Some(Arc::new(filter));
+        self.traversal.clear();
+        self.position = None;
         self
     }
 
-    pub fn next_node(&mut self, _document: &Document) -> Option<NodeId> {
+    pub fn next_node(&mut self, document: &Document) -> Option<NodeId> {
+        self.ensure_traversal(document);
+
+        let len = self.traversal.len();
+        if len == 0 {
+            return None;
+        }
+
+        let mut idx = self.position.map_or(0, |i| i.saturating_add(1));
+        while idx < len {
+            let node_id = self.traversal[idx];
+            if self.accepts_node(document, node_id) {
+                self.position = Some(idx);
+                return Some(node_id);
+            }
+            idx += 1;
+        }
+
         None
     }
 
-    pub fn previous_node(&mut self, _document: &Document) -> Option<NodeId> {
+    pub fn previous_node(&mut self, document: &Document) -> Option<NodeId> {
+        self.ensure_traversal(document);
+
+        if self.traversal.is_empty() {
+            return None;
+        }
+
+        let mut idx = match self.position {
+            Some(pos) if pos > 0 => pos - 1,
+            Some(_) | None => return None,
+        };
+
+        loop {
+            let node_id = self.traversal[idx];
+            if self.accepts_node(document, node_id) {
+                self.position = Some(idx);
+                return Some(node_id);
+            }
+
+            if idx == 0 {
+                break;
+            }
+            idx -= 1;
+        }
+
         None
     }
 
-    pub fn detach(&mut self) {}
+    pub fn detach(&mut self) {
+        self.traversal.clear();
+        self.position = None;
+    }
 
-    fn accepts_node(&self, node: NodeId) -> bool {
-        if let Some(ref f) = self.filter {
-            f(node)
+    fn ensure_traversal(&mut self, document: &Document) {
+        if self.traversal.is_empty() {
+            self.rebuild_traversal(document);
+        }
+    }
+
+    fn rebuild_traversal(&mut self, document: &Document) {
+        self.traversal.clear();
+        let mut stack = vec![self.root];
+
+        while let Some(node) = stack.pop() {
+            self.traversal.push(node);
+            let mut children = document.get_children(node);
+            if !children.is_empty() {
+                for child in children.drain(..).rev() {
+                    stack.push(child);
+                }
+            }
+        }
+
+        self.position = None;
+    }
+
+    fn accepts_node(&self, document: &Document, node: NodeId) -> bool {
+        if !self.matches_what_to_show(document, node) {
+            return false;
+        }
+
+        if let Some(ref filter) = self.filter {
+            filter(node)
         } else {
             true
         }
+    }
+
+    fn matches_what_to_show(&self, document: &Document, node: NodeId) -> bool {
+        mask_matches(self.what_to_show, document, node)
     }
 }
 
@@ -355,11 +472,7 @@ impl std::fmt::Debug for NodeIterator {
         f.debug_struct("NodeIterator")
             .field("root", &self.root)
             .field("what_to_show", &self.what_to_show)
-            .field("reference_node", &self.reference_node)
-            .field(
-                "pointer_before_reference_node",
-                &self.pointer_before_reference_node,
-            )
+            .field("position", &self.position)
             .finish()
     }
 }
@@ -382,20 +495,24 @@ impl Default for DOMRange {
 
 impl DOMRange {
     pub fn new() -> Self {
-        Self {
-            start_container: NodeId::new(),
+        let start = NodeId::new();
+        let mut range = Self {
+            start_container: start,
             start_offset: 0,
-            end_container: NodeId::new(),
+            end_container: start,
             end_offset: 0,
             collapsed: true,
             common_ancestor_container: None,
-        }
+        };
+        range.update_default_common_ancestor();
+        range
     }
 
     pub fn set_start(&mut self, node: NodeId, offset: u32) -> Result<()> {
         self.start_container = node;
         self.start_offset = offset;
         self.update_collapsed();
+        self.update_default_common_ancestor();
         Ok(())
     }
 
@@ -403,6 +520,7 @@ impl DOMRange {
         self.end_container = node;
         self.end_offset = offset;
         self.update_collapsed();
+        self.update_default_common_ancestor();
         Ok(())
     }
 
@@ -413,6 +531,7 @@ impl DOMRange {
                 self.set_start(parent, idx as u32)?;
             }
         }
+        self.recompute_common_ancestor(document);
         Ok(())
     }
 
@@ -423,6 +542,7 @@ impl DOMRange {
                 self.set_start(parent, (idx + 1) as u32)?;
             }
         }
+        self.recompute_common_ancestor(document);
         Ok(())
     }
 
@@ -433,6 +553,7 @@ impl DOMRange {
                 self.set_end(parent, idx as u32)?;
             }
         }
+        self.recompute_common_ancestor(document);
         Ok(())
     }
 
@@ -443,6 +564,7 @@ impl DOMRange {
                 self.set_end(parent, (idx + 1) as u32)?;
             }
         }
+        self.recompute_common_ancestor(document);
         Ok(())
     }
 
@@ -455,11 +577,13 @@ impl DOMRange {
             self.start_offset = self.end_offset;
         }
         self.collapsed = true;
+        self.common_ancestor_container = Some(self.start_container);
     }
 
     pub fn select_node(&mut self, node: NodeId, document: &Document) -> Result<()> {
         self.set_start_before(node, document)?;
         self.set_end_after(node, document)?;
+        self.recompute_common_ancestor(document);
         Ok(())
     }
 
@@ -467,6 +591,7 @@ impl DOMRange {
         let children = document.get_children(node);
         self.set_start(node, 0)?;
         self.set_end(node, children.len() as u32)?;
+        self.recompute_common_ancestor(document);
         Ok(())
     }
 
@@ -511,5 +636,44 @@ impl DOMRange {
     fn update_collapsed(&mut self) {
         self.collapsed =
             self.start_container == self.end_container && self.start_offset == self.end_offset;
+    }
+
+    fn update_default_common_ancestor(&mut self) {
+        if self.start_container == self.end_container {
+            self.common_ancestor_container = Some(self.start_container);
+        } else {
+            self.common_ancestor_container = None;
+        }
+    }
+
+    fn recompute_common_ancestor(&mut self, document: &Document) {
+        let mut ancestors = HashSet::new();
+        let mut current = Some(self.start_container);
+
+        while let Some(node) = current {
+            ancestors.insert(node);
+            current = document.get_parent(node);
+        }
+
+        let mut current = Some(self.end_container);
+        let mut found = None;
+
+        while let Some(node) = current {
+            if ancestors.contains(&node) {
+                found = Some(node);
+                break;
+            }
+            current = document.get_parent(node);
+        }
+
+        if found.is_none() && self.start_container == self.end_container {
+            found = Some(self.start_container);
+        }
+
+        self.common_ancestor_container = found;
+    }
+
+    pub fn common_ancestor(&self) -> Option<NodeId> {
+        self.common_ancestor_container
     }
 }

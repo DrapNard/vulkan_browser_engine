@@ -4,12 +4,14 @@ pub use heap::*;
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::runtime::{Builder, Handle};
 use tokio::sync::RwLock;
 use tracing::log;
 
 pub struct GarbageCollector {
     heap: Arc<RwLock<Heap>>,
     roots: Arc<RwLock<HashSet<ObjectId>>>,
+    #[allow(dead_code)]
     mark_stack: Vec<ObjectId>,
     collection_threshold: usize,
     allocation_count: usize,
@@ -71,9 +73,11 @@ impl GarbageCollector {
         let roots = self.roots.read().await.clone();
         let mut heap = self.heap.write().await;
 
+        let scratch_stack = std::mem::take(&mut self.mark_stack);
+
         let mut marker = GcMarker {
             marked: HashSet::new(),
-            mark_stack: Vec::new(),
+            mark_stack: scratch_stack,
         };
 
         for root in roots {
@@ -85,6 +89,8 @@ impl GarbageCollector {
 
         let freed_bytes = self.sweep_phase(&mut marker, &mut heap).await;
 
+        self.mark_stack = marker.mark_stack;
+
         self.allocation_count = self.allocation_count.saturating_sub(freed_bytes);
 
         let duration = start_time.elapsed();
@@ -93,6 +99,19 @@ impl GarbageCollector {
             duration,
             freed_bytes
         );
+    }
+
+    pub fn collect_blocking(&mut self) {
+        match Handle::try_current() {
+            Ok(handle) => {
+                handle.block_on(self.collect());
+            }
+            Err(_) => {
+                if let Ok(rt) = Builder::new_current_thread().enable_all().build() {
+                    rt.block_on(self.collect());
+                }
+            }
+        }
     }
 
     async fn mark_phase(&self, marker: &mut GcMarker, heap: &Heap) {

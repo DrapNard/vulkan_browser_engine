@@ -191,7 +191,6 @@ pub struct Element {
     dataset: Arc<RwLock<HashMap<String, String>>>,
     class_list: Arc<RwLock<Vec<String>>>,
     internals: Arc<RwLock<ElementInternals>>,
-    pseudo_elements: Arc<RwLock<HashMap<String, NodeId>>>,
     animation_properties: Arc<RwLock<AnimationProperties>>,
 }
 
@@ -247,7 +246,6 @@ impl Element {
             dataset: Arc::new(RwLock::new(HashMap::new())),
             class_list: Arc::new(RwLock::new(Vec::new())),
             internals: Arc::new(RwLock::new(ElementInternals::default())),
-            pseudo_elements: Arc::new(RwLock::new(HashMap::new())),
             animation_properties: Arc::new(RwLock::new(AnimationProperties::default())),
         }
     }
@@ -266,7 +264,6 @@ impl Element {
             dataset: Arc::new(RwLock::new(HashMap::new())),
             class_list: Arc::new(RwLock::new(classes)),
             internals: Arc::new(RwLock::new(ElementInternals::default())),
-            pseudo_elements: Arc::new(RwLock::new(HashMap::new())),
             animation_properties: Arc::new(RwLock::new(AnimationProperties::default())),
         })
     }

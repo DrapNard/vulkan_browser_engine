@@ -6,6 +6,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Semaphore;
 
 pub mod gc;
@@ -191,7 +192,8 @@ unsafe impl Sync for RuntimeCore {}
 pub struct JSRuntime {
     core: Arc<Mutex<RuntimeCore>>,
     jit_compiler: Arc<JITCompiler>,
-    garbage_collector: Arc<Mutex<GarbageCollector>>,
+    garbage_collector: Arc<AsyncMutex<GarbageCollector>>,
+    #[allow(dead_code)]
     heap_manager: Arc<HeapManager>,
     module_resolver: Arc<ModuleResolver>,
     execution_contexts: Arc<DashMap<u64, ExecutionContext>>,
@@ -230,7 +232,7 @@ impl JSRuntime {
         );
 
         let heap_manager = Arc::new(HeapManager::new());
-        let garbage_collector = Arc::new(Mutex::new(GarbageCollector::new()));
+        let garbage_collector = Arc::new(AsyncMutex::new(GarbageCollector::new()));
         let module_resolver = Arc::new(ModuleResolver::new());
 
         let runtime = Self {
@@ -455,7 +457,8 @@ impl JSRuntime {
 
         if should_gc {
             let gc_start = Instant::now();
-            self.garbage_collector.lock().collect();
+            let mut gc = self.garbage_collector.lock().await;
+            gc.collect().await;
 
             let mut metrics = self.performance_metrics.write();
             metrics.gc_time_us += gc_start.elapsed().as_micros() as u64;

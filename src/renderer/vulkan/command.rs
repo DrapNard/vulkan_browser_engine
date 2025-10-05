@@ -107,11 +107,12 @@ impl CommandPool {
         Ok(())
     }
 
-    fn return_buffer(&mut self, buffer: vk::CommandBuffer) {
-        if let Some(pos) = self.in_use_buffers.iter().position(|&b| b == buffer) {
-            self.in_use_buffers.remove(pos);
-            self.available_buffers.push_back(buffer);
-        }
+    fn queue_family(&self) -> u32 {
+        self.queue_family
+    }
+
+    fn handle(&self) -> vk::CommandPool {
+        self.pool
     }
 }
 
@@ -169,19 +170,7 @@ pub struct CommandManager {
     current_frame: Arc<RwLock<u32>>,
     max_frames_in_flight: u32,
     command_buffer_registry: Arc<DashMap<vk::CommandBuffer, CommandBufferInfo>>,
-    submission_queue: Arc<Mutex<VecDeque<SubmissionBatch>>>,
-    worker_thread: Option<std::thread::JoinHandle<()>>,
     shutdown_signal: Arc<Mutex<Option<Sender<()>>>>,
-}
-
-#[derive(Debug)]
-struct SubmissionBatch {
-    command_buffers: Vec<vk::CommandBuffer>,
-    queue: vk::Queue,
-    wait_semaphores: Vec<vk::Semaphore>,
-    wait_stages: Vec<vk::PipelineStageFlags>,
-    signal_semaphores: Vec<vk::Semaphore>,
-    fence: vk::Fence,
 }
 
 impl CommandManager {
@@ -227,8 +216,6 @@ impl CommandManager {
             current_frame: Arc::new(RwLock::new(0)),
             max_frames_in_flight,
             command_buffer_registry: Arc::new(DashMap::new()),
-            submission_queue: Arc::new(Mutex::new(VecDeque::new())),
-            worker_thread: None,
             shutdown_signal: Arc::new(Mutex::new(Some(shutdown_tx))),
         };
 
@@ -300,38 +287,35 @@ impl CommandManager {
                 index
             });
 
-        let buffer = match buffer_type {
+        let (buffer, pool_handle, queue_family) = match buffer_type {
             CommandBufferType::Graphics => {
                 let mut pools = self.graphics_pools.lock();
                 let pool_count = pools.len();
-                pools[pool_index % pool_count]
-                    .allocate_buffer(self.device.logical_device(), level)?
+                let pool = &mut pools[pool_index % pool_count];
+                let buffer = pool.allocate_buffer(self.device.logical_device(), level)?;
+                (buffer, pool.handle(), pool.queue_family())
             }
             CommandBufferType::Compute => {
                 let mut pools = self.compute_pools.lock();
                 let pool_count = pools.len();
-                pools[pool_index % pool_count]
-                    .allocate_buffer(self.device.logical_device(), level)?
+                let pool = &mut pools[pool_index % pool_count];
+                let buffer = pool.allocate_buffer(self.device.logical_device(), level)?;
+                (buffer, pool.handle(), pool.queue_family())
             }
             CommandBufferType::Transfer => {
                 let mut pools = self.transfer_pools.lock();
                 let pool_count = pools.len();
-                pools[pool_index % pool_count]
-                    .allocate_buffer(self.device.logical_device(), level)?
+                let pool = &mut pools[pool_index % pool_count];
+                let buffer = pool.allocate_buffer(self.device.logical_device(), level)?;
+                (buffer, pool.handle(), pool.queue_family())
             }
-        };
-
-        let queue_family = match buffer_type {
-            CommandBufferType::Graphics => self.device.queue_families().graphics,
-            CommandBufferType::Compute => self.device.queue_families().compute,
-            CommandBufferType::Transfer => self.device.queue_families().transfer,
         };
 
         let current_frame = *self.current_frame.read();
 
         let buffer_info = CommandBufferInfo {
             buffer,
-            pool: vk::CommandPool::null(),
+            pool: pool_handle,
             queue_family,
             buffer_type,
             is_recording: false,
@@ -385,9 +369,27 @@ impl CommandManager {
             .ok_or_else(|| CommandError::Submission("Buffer not found in registry".to_string()))?;
 
         let queue = match buffer_info.buffer_type {
-            CommandBufferType::Graphics => self.device.graphics_queue(),
-            CommandBufferType::Compute => self.device.compute_queue(),
-            CommandBufferType::Transfer => self.device.transfer_queue(),
+            CommandBufferType::Graphics => {
+                debug_assert_eq!(
+                    buffer_info.queue_family,
+                    self.device.queue_families().graphics
+                );
+                self.device.graphics_queue()
+            }
+            CommandBufferType::Compute => {
+                debug_assert_eq!(
+                    buffer_info.queue_family,
+                    self.device.queue_families().compute
+                );
+                self.device.compute_queue()
+            }
+            CommandBufferType::Transfer => {
+                debug_assert_eq!(
+                    buffer_info.queue_family,
+                    self.device.queue_families().transfer
+                );
+                self.device.transfer_queue()
+            }
         };
 
         // Get the submission fence, ensuring proper lifetime management

@@ -360,7 +360,7 @@ impl V8Runtime {
 
     pub fn trigger_gc(&self) -> Result<(), V8Error> {
         if let Ok(mut gc) = self.gc.try_lock() {
-            gc.collect();
+            gc.collect_blocking();
             Ok(())
         } else {
             Err(V8Error::GarbageCollectionFailed)

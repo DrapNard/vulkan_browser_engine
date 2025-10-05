@@ -56,6 +56,7 @@ pub enum ValueType {
 }
 
 impl ValueType {
+    #[allow(dead_code)]
     fn to_cranelift_type(self) -> Type {
         match self {
             ValueType::I32 | ValueType::Boolean => types::I32,
@@ -203,6 +204,7 @@ pub struct JITCompiler {
     profiler_data: Arc<ProfilerData>,
     runtime_helpers: Arc<DashMap<String, *const u8>>,
     type_specializations: Arc<DashMap<String, HashMap<String, FuncId>>>,
+    #[allow(dead_code)]
     deoptimization_stubs: Arc<DashMap<String, FuncId>>,
 }
 
@@ -321,7 +323,7 @@ impl JITCompiler {
             }
 
             module.clear_context(&mut context);
-            module.finalize_definitions();
+            let _ = module.finalize_definitions();
 
             let func_ptr = module.get_finalized_function(func_id);
 

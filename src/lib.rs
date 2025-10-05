@@ -205,25 +205,74 @@ pub struct NetworkMetrics {
 
 #[derive(Debug, Clone)]
 pub enum InputEvent {
-    MouseMove { x: i32, y: i32 },
-    MouseClick { x: i32, y: i32, button: u8 },
-    MouseWheel { x: i32, y: i32, delta_x: f64, delta_y: f64 },
-    KeyPress { key: String, modifiers: u8 },
-    KeyRelease { key: String, modifiers: u8 },
-    Scroll { delta_x: f64, delta_y: f64 },
-    Touch { x: i32, y: i32, pressure: f64, id: u32 },
-    Resize { width: u32, height: u32 },
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseClick {
+        x: i32,
+        y: i32,
+        button: u8,
+    },
+    MouseWheel {
+        x: i32,
+        y: i32,
+        delta_x: f64,
+        delta_y: f64,
+    },
+    KeyPress {
+        key: String,
+        modifiers: u8,
+    },
+    KeyRelease {
+        key: String,
+        modifiers: u8,
+    },
+    Scroll {
+        delta_x: f64,
+        delta_y: f64,
+    },
+    Touch {
+        x: i32,
+        y: i32,
+        pressure: f64,
+        id: u32,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum BrowserEvent {
-    PageLoaded { url: String, load_time_ms: u64 },
-    NavigationStarted { url: String },
-    JavaScriptError { message: String, line: u32, column: u32 },
-    NetworkError { url: String, error: String },
-    SecurityViolation { description: String },
-    PerformanceWarning { metric: String, value: f64, threshold: f64 },
-    ErrorHandled { message: String }, // emitted by error handler
+    PageLoaded {
+        url: String,
+        load_time_ms: u64,
+    },
+    NavigationStarted {
+        url: String,
+    },
+    JavaScriptError {
+        message: String,
+        line: u32,
+        column: u32,
+    },
+    NetworkError {
+        url: String,
+        error: String,
+    },
+    SecurityViolation {
+        description: String,
+    },
+    PerformanceWarning {
+        metric: String,
+        value: f64,
+        threshold: f64,
+    },
+    ErrorHandled {
+        message: String,
+    }, // emitted by error handler
 }
 
 /// The main engine. Intentionally uses `Arc<…>` around non-`Send` components,

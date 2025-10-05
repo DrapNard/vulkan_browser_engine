@@ -175,6 +175,7 @@ struct ResponseCache {
 struct CacheEntry {
     response: FetchResponse,
     expires: std::time::Instant,
+    #[allow(dead_code)]
     etag: Option<String>,
 }
 

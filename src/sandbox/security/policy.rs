@@ -5,6 +5,7 @@ use tracing::log;
 
 pub struct SecurityPolicyEngine {
     policies: Vec<SecurityPolicy>,
+    #[allow(dead_code)]
     policy_groups: HashMap<String, PolicyGroup>,
     enforcement_mode: EnforcementMode,
     default_actions: HashMap<PolicyViolationType, PolicyAction>,
@@ -211,7 +212,7 @@ impl SecurityPolicyEngine {
             enforcement_mode: EnforcementMode::Enforcing,
             default_actions: HashMap::new(),
         };
-        
+
         engine.load_default_policies();
         engine.setup_default_actions();
         engine
@@ -323,7 +324,9 @@ impl SecurityPolicyEngine {
             }
 
             for rule in &policy.rules {
-                if self.evaluate_condition(&rule.condition, event) && !self.check_exceptions(&rule.exceptions, event) {
+                if self.evaluate_condition(&rule.condition, event)
+                    && !self.check_exceptions(&rule.exceptions, event)
+                {
                     let violation = PolicyViolation {
                         policy_id: policy.id.clone(),
                         rule_id: rule.id.clone(),
@@ -356,18 +359,24 @@ impl SecurityPolicyEngine {
                     true
                 }
             }
-            PolicyCondition::ResourceAccess { resource_type, access_type, resource_path } => {
-                self.matches_resource_access(event, resource_type, access_type, resource_path)
-            }
-            PolicyCondition::NetworkActivity { protocol, destination, port } => {
-                self.matches_network_activity(event, protocol, destination, port)
-            }
-            PolicyCondition::SystemCall { syscall_name, .. } => {
-                event.details.get("syscall").map_or(false, |sc| sc == syscall_name)
-            }
-            PolicyCondition::Composite { operator, conditions } => {
-                self.evaluate_composite_condition(operator, conditions, event)
-            }
+            PolicyCondition::ResourceAccess {
+                resource_type,
+                access_type,
+                resource_path,
+            } => self.matches_resource_access(event, resource_type, access_type, resource_path),
+            PolicyCondition::NetworkActivity {
+                protocol,
+                destination,
+                port,
+            } => self.matches_network_activity(event, protocol, destination, port),
+            PolicyCondition::SystemCall { syscall_name, .. } => event
+                .details
+                .get("syscall")
+                .map_or(false, |sc| sc == syscall_name),
+            PolicyCondition::Composite {
+                operator,
+                conditions,
+            } => self.evaluate_composite_condition(operator, conditions, event),
         }
     }
 
@@ -382,22 +391,19 @@ impl SecurityPolicyEngine {
         let event_access_type = event.details.get("access_type");
         let event_path = event.details.get("path");
 
-        let resource_match = event_resource_type.map_or(false, |rt| {
-            match (resource_type, rt.as_str()) {
+        let resource_match =
+            event_resource_type.map_or(false, |rt| match (resource_type, rt.as_str()) {
                 (ResourceType::File, "file") => true,
                 (ResourceType::Directory, "directory") => true,
                 (ResourceType::Network, "network") => true,
                 _ => false,
-            }
-        });
+            });
 
-        let access_match = event_access_type.map_or(false, |at| {
-            match (access_type, at.as_str()) {
-                (AccessType::Read, "read") => true,
-                (AccessType::Write, "write") => true,
-                (AccessType::Execute, "execute") => true,
-                _ => false,
-            }
+        let access_match = event_access_type.map_or(false, |at| match (access_type, at.as_str()) {
+            (AccessType::Read, "read") => true,
+            (AccessType::Write, "write") => true,
+            (AccessType::Execute, "execute") => true,
+            _ => false,
         });
 
         let path_match = if let Some(expected_path) = resource_path {
@@ -417,19 +423,29 @@ impl SecurityPolicyEngine {
         port: &Option<u16>,
     ) -> bool {
         let protocol_match = if let Some(expected_protocol) = protocol {
-            event.details.get("protocol").map_or(false, |p| p == expected_protocol)
+            event
+                .details
+                .get("protocol")
+                .map_or(false, |p| p == expected_protocol)
         } else {
             true
         };
 
         let destination_match = if let Some(expected_dest) = destination {
-            event.details.get("destination").map_or(false, |d| d.contains(expected_dest))
+            event
+                .details
+                .get("destination")
+                .map_or(false, |d| d.contains(expected_dest))
         } else {
             true
         };
 
         let port_match = if let Some(expected_port) = port {
-            event.details.get("port").and_then(|p| p.parse::<u16>().ok()).map_or(false, |p| p == *expected_port)
+            event
+                .details
+                .get("port")
+                .and_then(|p| p.parse::<u16>().ok())
+                .map_or(false, |p| p == *expected_port)
         } else {
             true
         };
@@ -457,26 +473,28 @@ impl SecurityPolicyEngine {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                
+
                 if now > expires_at {
                     return false;
                 }
             }
-            
+
             self.evaluate_condition(&exception.condition, event)
         })
     }
 
     fn determine_violation_type(&self, condition: &PolicyCondition) -> PolicyViolationType {
         match condition {
-            PolicyCondition::ResourceAccess { resource_type, .. } => {
-                match resource_type {
-                    ResourceType::File | ResourceType::Directory => PolicyViolationType::UnauthorizedFileAccess,
-                    ResourceType::Network => PolicyViolationType::UnauthorizedNetworkAccess,
-                    _ => PolicyViolationType::MaliciousActivity,
+            PolicyCondition::ResourceAccess { resource_type, .. } => match resource_type {
+                ResourceType::File | ResourceType::Directory => {
+                    PolicyViolationType::UnauthorizedFileAccess
                 }
+                ResourceType::Network => PolicyViolationType::UnauthorizedNetworkAccess,
+                _ => PolicyViolationType::MaliciousActivity,
+            },
+            PolicyCondition::NetworkActivity { .. } => {
+                PolicyViolationType::UnauthorizedNetworkAccess
             }
-            PolicyCondition::NetworkActivity { .. } => PolicyViolationType::UnauthorizedNetworkAccess,
             PolicyCondition::SystemCall { .. } => PolicyViolationType::SuspiciousSystemCall,
             _ => PolicyViolationType::MaliciousActivity,
         }
@@ -488,26 +506,33 @@ impl SecurityPolicyEngine {
         evidence.insert("severity".to_string(), format!("{:?}", event.severity));
         evidence.insert("timestamp".to_string(), event.timestamp.to_string());
         evidence.insert("process_id".to_string(), event.source_process.to_string());
-        
+
         for (key, value) in &event.details {
             evidence.insert(key.clone(), value.clone());
         }
-        
+
         evidence
     }
 
-    fn apply_action(&self, action: &PolicyAction, event: &SecurityEvent, policy_id: &str) -> AppliedAction {
+    fn apply_action(
+        &self,
+        action: &PolicyAction,
+        event: &SecurityEvent,
+        policy_id: &str,
+    ) -> AppliedAction {
         match action {
-            PolicyAction::Allow => {
-                AppliedAction {
-                    action: action.clone(),
-                    policy_id: policy_id.to_string(),
-                    success: true,
-                    message: Some("Access allowed".to_string()),
-                }
-            }
+            PolicyAction::Allow => AppliedAction {
+                action: action.clone(),
+                policy_id: policy_id.to_string(),
+                success: true,
+                message: Some("Access allowed".to_string()),
+            },
             PolicyAction::Deny | PolicyAction::Block => {
-                log::warn!("Blocking action from process {} due to policy {}", event.source_process, policy_id);
+                log::warn!(
+                    "Blocking action from process {} due to policy {}",
+                    event.source_process,
+                    policy_id
+                );
                 AppliedAction {
                     action: action.clone(),
                     policy_id: policy_id.to_string(),
@@ -516,7 +541,10 @@ impl SecurityPolicyEngine {
                 }
             }
             PolicyAction::Quarantine => {
-                log::error!("Quarantining process {} due to policy violation", event.source_process);
+                log::error!(
+                    "Quarantining process {} due to policy violation",
+                    event.source_process
+                );
                 AppliedAction {
                     action: action.clone(),
                     policy_id: policy_id.to_string(),
@@ -525,7 +553,10 @@ impl SecurityPolicyEngine {
                 }
             }
             PolicyAction::Terminate => {
-                log::error!("Terminating process {} due to critical policy violation", event.source_process);
+                log::error!(
+                    "Terminating process {} due to critical policy violation",
+                    event.source_process
+                );
                 AppliedAction {
                     action: action.clone(),
                     policy_id: policy_id.to_string(),
@@ -534,7 +565,12 @@ impl SecurityPolicyEngine {
                 }
             }
             PolicyAction::Alert(level) => {
-                log::info!("Alert ({:?}): Policy {} triggered by process {}", level, policy_id, event.source_process);
+                log::info!(
+                    "Alert ({:?}): Policy {} triggered by process {}",
+                    level,
+                    policy_id,
+                    event.source_process
+                );
                 AppliedAction {
                     action: action.clone(),
                     policy_id: policy_id.to_string(),
@@ -544,10 +580,26 @@ impl SecurityPolicyEngine {
             }
             PolicyAction::Log(level) => {
                 match level {
-                    LogLevel::Debug => log::debug!("Policy {} triggered by process {}", policy_id, event.source_process),
-                    LogLevel::Info => log::info!("Policy {} triggered by process {}", policy_id, event.source_process),
-                    LogLevel::Warning => log::warn!("Policy {} triggered by process {}", policy_id, event.source_process),
-                    LogLevel::Error => log::error!("Policy {} triggered by process {}", policy_id, event.source_process),
+                    LogLevel::Debug => log::debug!(
+                        "Policy {} triggered by process {}",
+                        policy_id,
+                        event.source_process
+                    ),
+                    LogLevel::Info => log::info!(
+                        "Policy {} triggered by process {}",
+                        policy_id,
+                        event.source_process
+                    ),
+                    LogLevel::Warning => log::warn!(
+                        "Policy {} triggered by process {}",
+                        policy_id,
+                        event.source_process
+                    ),
+                    LogLevel::Error => log::error!(
+                        "Policy {} triggered by process {}",
+                        policy_id,
+                        event.source_process
+                    ),
                 }
                 AppliedAction {
                     action: action.clone(),
@@ -557,7 +609,11 @@ impl SecurityPolicyEngine {
                 }
             }
             PolicyAction::Throttle(config) => {
-                log::info!("Throttling process {} (max {} ops/sec)", event.source_process, config.max_operations_per_second);
+                log::info!(
+                    "Throttling process {} (max {} ops/sec)",
+                    event.source_process,
+                    config.max_operations_per_second
+                );
                 AppliedAction {
                     action: action.clone(),
                     policy_id: policy_id.to_string(),
@@ -566,7 +622,11 @@ impl SecurityPolicyEngine {
                 }
             }
             PolicyAction::Redirect(config) => {
-                log::info!("Redirecting access from process {} to {}", event.source_process, config.target_path);
+                log::info!(
+                    "Redirecting access from process {} to {}",
+                    event.source_process,
+                    config.target_path
+                );
                 AppliedAction {
                     action: action.clone(),
                     policy_id: policy_id.to_string(),
@@ -588,17 +648,23 @@ impl SecurityPolicyEngine {
     }
 
     pub fn remove_policy(&mut self, policy_id: &str) -> Result<(), PolicyError> {
-        let index = self.policies.iter().position(|p| p.id == policy_id)
+        let index = self
+            .policies
+            .iter()
+            .position(|p| p.id == policy_id)
             .ok_or_else(|| PolicyError::PolicyNotFound(policy_id.to_string()))?;
-        
+
         self.policies.remove(index);
         Ok(())
     }
 
     pub fn update_policy(&mut self, policy: SecurityPolicy) -> Result<(), PolicyError> {
-        let index = self.policies.iter().position(|p| p.id == policy.id)
+        let index = self
+            .policies
+            .iter()
+            .position(|p| p.id == policy.id)
             .ok_or_else(|| PolicyError::PolicyNotFound(policy.id.clone()))?;
-        
+
         self.validate_policy(&policy)?;
         self.policies[index] = policy;
         Ok(())
@@ -606,11 +672,15 @@ impl SecurityPolicyEngine {
 
     fn validate_policy(&self, policy: &SecurityPolicy) -> Result<(), PolicyError> {
         if policy.name.is_empty() {
-            return Err(PolicyError::InvalidPolicy("Policy name cannot be empty".to_string()));
+            return Err(PolicyError::InvalidPolicy(
+                "Policy name cannot be empty".to_string(),
+            ));
         }
 
         if policy.rules.is_empty() {
-            return Err(PolicyError::InvalidPolicy("Policy must have at least one rule".to_string()));
+            return Err(PolicyError::InvalidPolicy(
+                "Policy must have at least one rule".to_string(),
+            ));
         }
 
         for rule in &policy.rules {
@@ -622,7 +692,9 @@ impl SecurityPolicyEngine {
 
     fn validate_rule(&self, rule: &PolicyRule) -> Result<(), PolicyError> {
         if rule.id.is_empty() {
-            return Err(PolicyError::InvalidPolicy("Rule ID cannot be empty".to_string()));
+            return Err(PolicyError::InvalidPolicy(
+                "Rule ID cannot be empty".to_string(),
+            ));
         }
 
         self.validate_condition(&rule.condition)?;
@@ -633,7 +705,9 @@ impl SecurityPolicyEngine {
         match condition {
             PolicyCondition::Composite { conditions, .. } => {
                 if conditions.is_empty() {
-                    return Err(PolicyError::InvalidPolicy("Composite condition must have at least one sub-condition".to_string()));
+                    return Err(PolicyError::InvalidPolicy(
+                        "Composite condition must have at least one sub-condition".to_string(),
+                    ));
                 }
                 for sub_condition in conditions {
                     self.validate_condition(sub_condition)?;
@@ -667,13 +741,17 @@ impl SecurityPolicyEngine {
             enabled_policies: self.policies.iter().filter(|p| p.enabled).count(),
             enforcement_mode: self.enforcement_mode,
             last_updated: std::time::SystemTime::now(),
-            policy_summary: self.policies.iter().map(|p| PolicySummary {
-                id: p.id.clone(),
-                name: p.name.clone(),
-                enabled: p.enabled,
-                rule_count: p.rules.len(),
-                severity: p.severity,
-            }).collect(),
+            policy_summary: self
+                .policies
+                .iter()
+                .map(|p| PolicySummary {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    enabled: p.enabled,
+                    rule_count: p.rules.len(),
+                    severity: p.severity,
+                })
+                .collect(),
         }
     }
 }

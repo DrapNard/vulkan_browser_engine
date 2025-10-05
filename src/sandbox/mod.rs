@@ -7,7 +7,17 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+
+use crate::sandbox::security::policy::{
+    EnforcementMode, PolicyAction, PolicyEvaluationResult,
+    PolicyViolation as PolicyEngineViolation, PolicyViolationType,
+    SecurityAuditReport as PolicyEngineAuditReport, SecurityPolicyEngine,
+};
+use crate::sandbox::security::{
+    SecurityAnalysisResult, SecurityEvent, SecurityEventType, SecurityFramework, SecuritySeverity,
+    SecurityStatus, ThreatLevel,
+};
 
 pub type ProcessId = u32;
 
@@ -29,6 +39,8 @@ pub struct SecurityAuditReport {
     pub security_violations: Vec<SecurityViolation>,
     pub resource_usage: ResourceUsageReport,
     pub compliance_status: ComplianceStatus,
+    pub security_status: SecurityStatus,
+    pub policy_engine_report: PolicyEngineAuditReport,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +59,7 @@ pub enum ViolationType {
     UnauthorizedNetworkAccess,
     FileSystemViolation,
     IpcViolation,
+    PolicyViolation,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +91,8 @@ pub struct SandboxManager {
     permission_manager: Arc<permissions::PermissionManager>,
     security_policy: SecurityPolicy,
     ipc_manager: Arc<ipc::IpcManager>,
+    security_framework: Arc<SecurityFramework>,
+    policy_engine: Arc<RwLock<SecurityPolicyEngine>>,
     max_processes: u32,
 }
 
@@ -89,12 +104,16 @@ impl SandboxManager {
     pub async fn with_config(config: SandboxConfig) -> Result<Self, SandboxError> {
         let permission_manager = Arc::new(permissions::PermissionManager::new().await?);
         let ipc_manager = Arc::new(ipc::IpcManager::new());
+        let security_framework = Arc::new(SecurityFramework::new());
+        let policy_engine = Arc::new(RwLock::new(SecurityPolicyEngine::new()));
 
         Ok(Self {
             processes: Arc::new(RwLock::new(HashMap::with_capacity(config.initial_capacity))),
             permission_manager,
             security_policy: config.security_policy,
             ipc_manager,
+            security_framework,
+            policy_engine,
             max_processes: config.max_processes,
         })
     }
@@ -106,6 +125,47 @@ impl SandboxManager {
         self.validate_process_creation(&config).await?;
 
         let process_id = Self::generate_process_id();
+        let creation_event = self.build_process_creation_event(process_id, &config);
+        let (evaluation, analysis, blocking_reason) =
+            self.evaluate_security_event(creation_event).await;
+
+        if let Some(reason) = blocking_reason {
+            error!(
+                target: "sandbox::security",
+                "Security policy denied process {} creation: {}",
+                process_id,
+                reason
+            );
+            return Err(SandboxError::SecurityViolation(reason));
+        }
+
+        if !evaluation.violations.is_empty() {
+            warn!(
+                target: "sandbox::security",
+                "Process {} triggered policy warnings: {:?}",
+                process_id,
+                evaluation
+                    .violations
+                    .iter()
+                    .map(|violation| violation.rule_id.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        if matches!(
+            analysis.threat_level,
+            ThreatLevel::Medium | ThreatLevel::High | ThreatLevel::Critical
+        ) || analysis.threat_score > 0.5
+        {
+            info!(
+                target: "sandbox::security",
+                "Process {} security profile initialized with threat level {:?} (score {:.2})",
+                process_id,
+                analysis.threat_level,
+                analysis.threat_score
+            );
+        }
+
         let sandboxed_process = process::SandboxedProcess::new(process_id, config).await?;
 
         {
@@ -159,6 +219,40 @@ impl SandboxManager {
             )));
         }
 
+        let ipc_event = self.build_ipc_event(from, to, &message);
+        let (evaluation, analysis, blocking_reason) = self.evaluate_security_event(ipc_event).await;
+
+        if let Some(reason) = blocking_reason {
+            return Err(SandboxError::SecurityViolation(reason));
+        }
+
+        if matches!(
+            analysis.threat_level,
+            ThreatLevel::High | ThreatLevel::Critical
+        ) {
+            warn!(
+                target: "sandbox::security",
+                "IPC message with priority {:?} escalated threat level {:?} between {} and {}",
+                message.priority,
+                analysis.threat_level,
+                from,
+                to
+            );
+        }
+
+        if !evaluation.violations.is_empty() {
+            debug!(
+                target: "sandbox::security",
+                "IPC message {} triggered policy violations {:?}",
+                message.id,
+                evaluation
+                    .violations
+                    .iter()
+                    .map(|violation| violation.rule_id.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+
         self.ipc_manager
             .send_message(from, to, message)
             .await
@@ -166,22 +260,27 @@ impl SandboxManager {
     }
 
     pub async fn audit_security(&self) -> Result<SecurityAuditReport, SandboxError> {
-        let processes = self.processes.read().await;
         let mut violations = Vec::new();
         let mut total_memory = 0u64;
         let mut total_cpu_usage = 0f64;
         let mut total_threads = 0u32;
         let mut total_file_handles = 0u32;
+        let total_processes;
 
-        for (process_id, process) in processes.iter() {
-            let stats = process.get_stats().await;
-            total_memory += stats.memory_usage_bytes;
-            total_cpu_usage += stats.cpu_usage_percent;
-            total_threads += stats.thread_count;
-            total_file_handles += stats.file_handles_count;
+        {
+            let processes = self.processes.read().await;
+            total_processes = processes.len();
 
-            let process_violations = self.check_process_violations(*process_id, &stats).await;
-            violations.extend(process_violations);
+            for (process_id, process) in processes.iter() {
+                let stats = process.get_stats().await;
+                total_memory += stats.memory_usage_bytes;
+                total_cpu_usage += stats.cpu_usage_percent;
+                total_threads += stats.thread_count;
+                total_file_handles += stats.file_handles_count;
+
+                let process_violations = self.check_process_violations(*process_id, &stats).await;
+                violations.extend(process_violations);
+            }
         }
 
         let compliance_status = if violations.is_empty() {
@@ -202,12 +301,15 @@ impl SandboxManager {
             }
         };
 
+        let security_status = self.security_framework.get_security_status().await;
+        let policy_engine_report = {
+            let engine = self.policy_engine.read().await;
+            engine.create_audit_report().await
+        };
+
         Ok(SecurityAuditReport {
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            total_processes: processes.len(),
+            timestamp: Self::current_timestamp(),
+            total_processes,
             security_violations: violations,
             resource_usage: ResourceUsageReport {
                 total_memory_used: total_memory,
@@ -217,6 +319,8 @@ impl SandboxManager {
                 total_threads,
             },
             compliance_status,
+            security_status,
+            policy_engine_report,
         })
     }
 
@@ -300,16 +404,421 @@ impl SandboxManager {
         Ok(())
     }
 
+    async fn evaluate_security_event(
+        &self,
+        event: SecurityEvent,
+    ) -> (
+        PolicyEvaluationResult,
+        SecurityAnalysisResult,
+        Option<String>,
+    ) {
+        let (evaluation, enforcement_mode) = {
+            let engine_guard = self.policy_engine.read().await;
+            let mode = engine_guard.get_enforcement_mode();
+            let evaluation = engine_guard.evaluate_event(&event).await;
+            (evaluation, mode)
+        };
+
+        let analysis = self
+            .security_framework
+            .analyze_security_event(event.clone())
+            .await;
+
+        if !analysis.recommended_actions.is_empty() {
+            let recommended: Vec<String> = analysis
+                .recommended_actions
+                .iter()
+                .map(|action| format!("{:?}", action))
+                .collect();
+            debug!(
+                target: "sandbox::security",
+                "Recommended actions for process {}: {} (threat {:.2})",
+                event.source_process,
+                recommended.join(", "),
+                analysis.threat_score
+            );
+        }
+
+        if !analysis.compliance_impact.required_actions.is_empty() {
+            debug!(
+                target: "sandbox::security",
+                "Compliance actions required for process {}: {:?}",
+                event.source_process,
+                analysis.compliance_impact.required_actions
+            );
+        }
+
+        if !analysis.compliance_impact.affected_frameworks.is_empty() {
+            debug!(
+                target: "sandbox::security",
+                "Compliance frameworks impacted for process {}: {:?} (risk {:?})",
+                event.source_process,
+                analysis.compliance_impact.affected_frameworks,
+                analysis.compliance_impact.risk_level
+            );
+        }
+
+        let blocking_action = evaluation
+            .applied_actions
+            .iter()
+            .find(|action| {
+                matches!(
+                    action.action,
+                    PolicyAction::Deny
+                        | PolicyAction::Block
+                        | PolicyAction::Terminate
+                        | PolicyAction::Quarantine
+                )
+            })
+            .map(|action| action.action.clone());
+
+        let mut reasons: Vec<String> = evaluation
+            .violations
+            .iter()
+            .map(|violation| {
+                format!(
+                    "{} (policy {} rule {})",
+                    violation.description, violation.policy_id, violation.rule_id
+                )
+            })
+            .collect();
+
+        if let Some(action) = &blocking_action {
+            reasons.push(format!("Enforcement action {:?} triggered", action));
+        }
+
+        if matches!(
+            analysis.threat_level,
+            ThreatLevel::High | ThreatLevel::Critical
+        ) {
+            reasons.push(format!(
+                "Threat level {:?} detected (score {:.2})",
+                analysis.threat_level, analysis.threat_score
+            ));
+        }
+
+        let message = match enforcement_mode {
+            EnforcementMode::Enforcing if !reasons.is_empty() => Some(reasons.join("; ")),
+            EnforcementMode::Complaining if blocking_action.is_some() => {
+                if let Some(action) = blocking_action.as_ref() {
+                    warn!(
+                        target: "sandbox::security",
+                        "Security policy would enforce {:?} for process {}: {}",
+                        action,
+                        event.source_process,
+                        reasons.join("; ")
+                    );
+                }
+                None
+            }
+            _ => None,
+        };
+
+        (evaluation, analysis, message)
+    }
+
+    fn map_policy_violation(
+        process_id: ProcessId,
+        violation: &PolicyEngineViolation,
+        timestamp: u64,
+    ) -> SecurityViolation {
+        SecurityViolation {
+            process_id,
+            violation_type: Self::map_policy_violation_type(&violation.violation_type),
+            severity: Self::map_policy_severity(violation.severity),
+            description: violation.description.clone(),
+            timestamp,
+        }
+    }
+
+    fn map_policy_violation_type(violation_type: &PolicyViolationType) -> ViolationType {
+        match violation_type {
+            PolicyViolationType::UnauthorizedFileAccess => ViolationType::FileSystemViolation,
+            PolicyViolationType::UnauthorizedNetworkAccess => {
+                ViolationType::UnauthorizedNetworkAccess
+            }
+            PolicyViolationType::PrivilegeEscalation => ViolationType::UnauthorizedSyscall,
+            PolicyViolationType::ResourceLimitExceeded => ViolationType::ExcessiveMemoryUsage,
+            PolicyViolationType::SuspiciousSystemCall => ViolationType::UnauthorizedSyscall,
+            PolicyViolationType::MaliciousActivity => ViolationType::PolicyViolation,
+        }
+    }
+
+    fn map_policy_severity(severity: SecuritySeverity) -> Severity {
+        match severity {
+            SecuritySeverity::Critical => Severity::Critical,
+            SecuritySeverity::High => Severity::High,
+            SecuritySeverity::Medium => Severity::Medium,
+            SecuritySeverity::Low => Severity::Low,
+            SecuritySeverity::Info => Severity::Low,
+        }
+    }
+
+    fn compute_threat_score(&self, stats: &process::ProcessStats) -> f64 {
+        let memory_component = if self.security_policy.max_memory_per_process == 0 {
+            0.0
+        } else {
+            (stats.memory_usage_bytes as f64 / self.security_policy.max_memory_per_process as f64)
+                .min(1.5)
+        };
+
+        let cpu_component = (stats.cpu_usage_percent / 100.0).min(1.5);
+        let fd_component = (stats.file_handles_count as f64 / 512.0).min(1.5);
+        let thread_component = if stats.thread_count == 0 {
+            0.0
+        } else {
+            (stats.thread_count as f64 / 128.0).min(1.5)
+        };
+
+        let components = [
+            memory_component,
+            cpu_component,
+            fd_component,
+            thread_component,
+        ];
+        let (sum, count) = components
+            .iter()
+            .fold((0.0, 0usize), |(sum, count), value| {
+                if *value > 0.0 {
+                    (sum + value, count + 1)
+                } else {
+                    (sum, count)
+                }
+            });
+
+        if count == 0 {
+            0.0
+        } else {
+            (sum / count as f64).clamp(0.0, 1.0)
+        }
+    }
+
+    fn severity_from_score(score: f64) -> SecuritySeverity {
+        if score >= 0.9 {
+            SecuritySeverity::Critical
+        } else if score >= 0.7 {
+            SecuritySeverity::High
+        } else if score >= 0.4 {
+            SecuritySeverity::Medium
+        } else if score >= 0.2 {
+            SecuritySeverity::Low
+        } else {
+            SecuritySeverity::Info
+        }
+    }
+
+    fn build_stats_event(
+        &self,
+        process_id: ProcessId,
+        stats: &process::ProcessStats,
+    ) -> SecurityEvent {
+        let score = self.compute_threat_score(stats);
+        let mut details = HashMap::new();
+        details.insert("resource_type".to_string(), "process_stats".to_string());
+        details.insert(
+            "cpu_usage_percent".to_string(),
+            format!("{:.2}", stats.cpu_usage_percent),
+        );
+        details.insert(
+            "memory_usage_bytes".to_string(),
+            stats.memory_usage_bytes.to_string(),
+        );
+        details.insert(
+            "file_handles_count".to_string(),
+            stats.file_handles_count.to_string(),
+        );
+        details.insert("thread_count".to_string(), stats.thread_count.to_string());
+        details.insert(
+            "network_bytes_sent".to_string(),
+            stats.network_bytes_sent.to_string(),
+        );
+        details.insert(
+            "network_bytes_received".to_string(),
+            stats.network_bytes_received.to_string(),
+        );
+        if let Some(pid) = stats.pid {
+            details.insert("pid".to_string(), pid.to_string());
+        }
+
+        SecurityEvent {
+            timestamp: Self::current_timestamp(),
+            event_type: SecurityEventType::ResourceAbuse,
+            severity: Self::severity_from_score(score),
+            source_process: process_id,
+            target_resource: format!("process://{process_id}"),
+            details,
+            threat_score: score,
+        }
+    }
+
+    fn build_process_creation_event(
+        &self,
+        process_id: ProcessId,
+        config: &process::ProcessConfig,
+    ) -> SecurityEvent {
+        let mut details = HashMap::new();
+        details.insert("executable".to_string(), config.executable_path.clone());
+        details.insert("arg_count".to_string(), config.arguments.len().to_string());
+        details.insert(
+            "isolation_level".to_string(),
+            format!("{:?}", config.isolation_level),
+        );
+        details.insert(
+            "max_memory_mb".to_string(),
+            config.resource_limits.max_memory_mb.to_string(),
+        );
+        details.insert(
+            "max_cpu_percent".to_string(),
+            config.resource_limits.max_cpu_percent.to_string(),
+        );
+        details.insert(
+            "allow_network".to_string(),
+            config.network_restrictions.allow_network.to_string(),
+        );
+        if !config.network_restrictions.allowed_domains.is_empty() {
+            details.insert(
+                "allowed_domains".to_string(),
+                config.network_restrictions.allowed_domains.join(","),
+            );
+        }
+        if !config.file_system_restrictions.read_only_paths.is_empty() {
+            details.insert(
+                "read_only_paths".to_string(),
+                config.file_system_restrictions.read_only_paths.join(","),
+            );
+        }
+
+        let requested_bytes = config
+            .resource_limits
+            .max_memory_mb
+            .saturating_mul(1024 * 1024);
+        let score = if self.security_policy.max_memory_per_process == 0 {
+            0.0
+        } else {
+            (requested_bytes as f64 / self.security_policy.max_memory_per_process as f64)
+                .clamp(0.0, 1.0)
+        };
+
+        SecurityEvent {
+            timestamp: Self::current_timestamp(),
+            event_type: SecurityEventType::AnomalousActivity,
+            severity: Self::severity_from_score(score.max(0.2)),
+            source_process: process_id,
+            target_resource: config.executable_path.clone(),
+            details,
+            threat_score: score,
+        }
+    }
+
+    fn build_ipc_event(
+        &self,
+        from: ProcessId,
+        to: ProcessId,
+        message: &ipc::IpcMessage,
+    ) -> SecurityEvent {
+        let mut details = HashMap::new();
+        details.insert("message_id".to_string(), message.id.to_string());
+        details.insert("priority".to_string(), format!("{:?}", message.priority));
+        details.insert(
+            "message_type".to_string(),
+            match &message.message_type {
+                ipc::MessageType::Custom(kind) => kind.clone(),
+                other => format!("{:?}", other),
+            },
+        );
+        details.insert(
+            "payload_size".to_string(),
+            message.payload.len().to_string(),
+        );
+
+        let score = match message.priority {
+            ipc::MessagePriority::Critical => 0.9,
+            ipc::MessagePriority::High => 0.7,
+            ipc::MessagePriority::Normal => 0.4,
+            ipc::MessagePriority::Low => 0.1,
+        };
+
+        SecurityEvent {
+            timestamp: Self::current_timestamp(),
+            event_type: SecurityEventType::PolicyViolation,
+            severity: Self::severity_from_score(score),
+            source_process: from,
+            target_resource: format!("process://{to}"),
+            details,
+            threat_score: score,
+        }
+    }
+
+    fn current_timestamp() -> u64 {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs()
+    }
+
     async fn check_process_violations(
         &self,
         process_id: ProcessId,
         stats: &process::ProcessStats,
     ) -> Vec<SecurityViolation> {
         let mut violations = Vec::new();
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let timestamp = Self::current_timestamp();
+
+        let stats_event = self.build_stats_event(process_id, stats);
+        let (evaluation, analysis, blocking_reason) =
+            self.evaluate_security_event(stats_event).await;
+
+        if let Some(reason) = blocking_reason {
+            violations.push(SecurityViolation {
+                process_id,
+                violation_type: ViolationType::PolicyViolation,
+                severity: Severity::Critical,
+                description: reason,
+                timestamp,
+            });
+        }
+
+        for violation in &evaluation.violations {
+            violations.push(Self::map_policy_violation(process_id, violation, timestamp));
+        }
+
+        if matches!(
+            analysis.threat_level,
+            ThreatLevel::High | ThreatLevel::Critical
+        ) {
+            violations.push(SecurityViolation {
+                process_id,
+                violation_type: ViolationType::UnauthorizedSyscall,
+                severity: if analysis.threat_level == ThreatLevel::Critical {
+                    Severity::Critical
+                } else {
+                    Severity::High
+                },
+                description: format!(
+                    "Elevated threat level {:?} detected (score {:.2})",
+                    analysis.threat_level, analysis.threat_score
+                ),
+                timestamp,
+            });
+        }
+
+        if !analysis.recommended_actions.is_empty() {
+            let actions = analysis
+                .recommended_actions
+                .iter()
+                .map(|action| format!("{:?}", action))
+                .collect::<Vec<_>>()
+                .join(", ");
+            violations.push(SecurityViolation {
+                process_id,
+                violation_type: ViolationType::PolicyViolation,
+                severity: Severity::Medium,
+                description: format!("Recommended remediation actions: {actions}"),
+                timestamp,
+            });
+        }
 
         if stats.memory_usage_bytes > self.security_policy.max_memory_per_process {
             violations.push(SecurityViolation {

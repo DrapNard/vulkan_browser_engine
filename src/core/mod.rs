@@ -6,10 +6,10 @@ pub mod network;
 
 use crate::js_engine::{JSError, JSRuntime};
 use crate::renderer::{ElementType, LayoutTree, RenderError, VulkanRenderer};
-use css::computed::StyleEngine;
+use css::computed::{ComputedStyleError, StyleEngine};
 use dom::Document;
 use events::EventSystem;
-use layout::LayoutEngine;
+use layout::{LayoutEngine, LayoutError as CoreLayoutError};
 use network::NetworkManager;
 use serde_json::Value;
 use std::sync::Arc;
@@ -37,6 +37,22 @@ pub enum CoreError {
     JsError(#[from] JSError),
     #[error("Render error: {0}")]
     RenderError(#[from] RenderError),
+    #[error("Style error: {0}")]
+    StyleError(String),
+    #[error("Layout error: {0}")]
+    LayoutError(String),
+}
+
+impl From<ComputedStyleError> for CoreError {
+    fn from(err: ComputedStyleError) -> Self {
+        CoreError::StyleError(err.to_string())
+    }
+}
+
+impl From<CoreLayoutError> for CoreError {
+    fn from(err: CoreLayoutError) -> Self {
+        CoreError::LayoutError(err.to_string())
+    }
 }
 
 impl CoreEngine {
@@ -64,9 +80,10 @@ impl CoreEngine {
         let html = self.network.fetch(url).await?;
         let mut doc_guard = self.dom.write().await;
         *doc_guard = Document::parse(&html).map_err(|e| CoreError::ParseError(e.to_string()))?;
-        self.style_engine.compute_styles(&doc_guard);
+        self.style_engine.compute_styles(&doc_guard)?;
         self.layout_engine
-            .compute_layout(&doc_guard, &self.style_engine);
+            .compute_layout(&doc_guard, &self.style_engine)
+            .await?;
         Ok(())
     }
 

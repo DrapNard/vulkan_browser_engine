@@ -229,7 +229,8 @@ impl FlexboxLayout {
         let mut flex_lines =
             self.collect_flex_lines(&mut flex_items, &flex_container, container_main_size);
 
-        self.resolve_flex_lengths(&mut flex_lines, &flex_container, container_main_size);
+        self.resolve_flex_lengths(&mut flex_lines, &flex_container, container_main_size)
+            .map_err(|err| LayoutError::Computation(err.to_string()))?;
 
         self.determine_cross_axis_sizes(
             &mut flex_lines,

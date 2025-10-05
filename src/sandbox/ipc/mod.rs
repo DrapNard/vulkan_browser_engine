@@ -73,6 +73,7 @@ struct MessageLimits {
     max_per_second: u32,
 }
 
+#[allow(dead_code)]
 struct RateLimiter {
     max_tokens: u32,
     tokens: Arc<std::sync::atomic::AtomicU32>,

@@ -256,10 +256,12 @@ impl MessageFilter {
         true
     }
 
+    #[allow(dead_code)]
     pub fn set_max_message_size(&mut self, size: usize) {
         self.max_message_size = size;
     }
 
+    #[allow(dead_code)]
     pub fn add_allowed_priority(&mut self, priority: MessagePriority) {
         if !self.allowed_priorities.contains(&priority) {
             self.allowed_priorities.push(priority);

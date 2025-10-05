@@ -99,6 +99,7 @@ pub enum ProcessCommand {
     GetStats,
 }
 
+#[allow(dead_code)]
 struct IsolationManager {
     isolation_level: IsolationLevel,
     namespace_handle: Option<NamespaceHandle>,
@@ -106,6 +107,7 @@ struct IsolationManager {
     capabilities: Vec<String>,
 }
 
+#[allow(dead_code)]
 struct NamespaceHandle {
     pid_namespace: Option<String>,
     network_namespace: Option<String>,
@@ -113,6 +115,7 @@ struct NamespaceHandle {
     user_namespace: Option<String>,
 }
 
+#[allow(dead_code)]
 struct SeccompFilter {
     allowed_syscalls: Vec<String>,
     blocked_syscalls: Vec<String>,
@@ -120,6 +123,7 @@ struct SeccompFilter {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum SeccompAction {
     Allow,
     Kill,
@@ -479,7 +483,7 @@ struct ProcessInfo {
 impl ProcessInfo {
     #[cfg(target_os = "linux")]
     fn parse_linux_proc(
-        stat_content: String,
+        _stat_content: String,
         status_content: String,
     ) -> Result<Self, ProcessError> {
         let mut memory_bytes = 0;

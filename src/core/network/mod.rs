@@ -253,6 +253,7 @@ pub struct CacheStats {
 pub struct ConnectionPool {
     clients: Arc<DashMap<String, Client>>,
     max_connections_per_host: usize,
+    #[allow(dead_code)]
     connection_timeout: Duration,
 }
 

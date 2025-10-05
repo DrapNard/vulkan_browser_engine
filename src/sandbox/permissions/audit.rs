@@ -10,6 +10,7 @@ use tracing::log;
 
 pub struct SecurityAuditor {
     event_buffer: Arc<RwLock<CircularBuffer<AuditEvent>>>,
+    #[allow(dead_code)]
     file_writer: Arc<FileWriter>,
     metrics: Arc<AtomicMetrics>,
     event_sender: mpsc::UnboundedSender<AuditEvent>,
@@ -163,6 +164,7 @@ impl<T> CircularBuffer<T> {
         }
     }
 
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.size
     }

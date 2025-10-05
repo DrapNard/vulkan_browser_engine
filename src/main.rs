@@ -8,7 +8,10 @@ use std::env;
 use std::rc::Rc;
 use std::time::Instant;
 
-use tokio::{runtime::{Builder, Runtime}, signal};
+use tokio::{
+    runtime::{Builder, Runtime},
+    signal,
+};
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -93,7 +96,10 @@ async fn run_headless_benchmark(engine: &BrowserEngine) -> vulkan_browser_engine
         println!("Loaded {} in {:?}", url, load_time);
 
         let metrics = engine.get_performance_metrics().await;
-        println!("Metrics: {}", serde_json::to_string_pretty(&metrics).unwrap());
+        println!(
+            "Metrics: {}",
+            serde_json::to_string_pretty(&metrics).unwrap()
+        );
     }
 
     println!("Total benchmark time: {:?}", start.elapsed());
@@ -286,57 +292,54 @@ fn run_windowed(app_config: AppConfig, rt: &Runtime) -> vulkan_browser_engine::R
                             ..
                         },
                     ..
-                } => {
-                    match keycode {
-                        KeyCode::F5 | KeyCode::KeyR => {
-                            if let Err(e) = rt.block_on(async { engine_for_loop.reload().await }) {
-                                error!("Failed to reload: {}", e);
-                            } else {
-                                info!("Reloaded page");
-                            }
+                } => match keycode {
+                    KeyCode::F5 | KeyCode::KeyR => {
+                        if let Err(e) = rt.block_on(async { engine_for_loop.reload().await }) {
+                            error!("Failed to reload: {}", e);
+                        } else {
+                            info!("Reloaded page");
                         }
-                        KeyCode::F11 => {
-                            is_fullscreen = !is_fullscreen;
-                            if is_fullscreen {
-                                let monitor = window_for_loop
-                                    .current_monitor()
-                                    .or_else(|| window_for_loop.available_monitors().next());
-                                window_for_loop
-                                    .set_fullscreen(Some(Fullscreen::Borderless(monitor)));
-                                info!("Entered fullscreen mode");
-                            } else {
-                                window_for_loop.set_fullscreen(None);
-                                info!("Exited fullscreen mode");
-                            }
-                        }
-                        KeyCode::F12 => {
-                            info!("Developer tools toggle requested (engine API required)");
-                        }
-                        KeyCode::Escape => {
-                            if is_fullscreen {
-                                is_fullscreen = false;
-                                window_for_loop.set_fullscreen(None);
-                                info!("Exited fullscreen mode with Escape");
-                            }
-                        }
-                        KeyCode::ArrowLeft => {
-                            info!("Navigate back requested (engine API required)");
-                        }
-                        KeyCode::ArrowRight => {
-                            info!("Navigate forward requested (engine API required)");
-                        }
-                        KeyCode::KeyL => {
-                            info!("Focus address bar requested (engine API required)");
-                        }
-                        KeyCode::KeyT => {
-                            info!("New tab requested (engine API required)");
-                        }
-                        KeyCode::KeyW => {
-                            info!("Close tab requested (engine API required)");
-                        }
-                        _ => {}
                     }
-                }
+                    KeyCode::F11 => {
+                        is_fullscreen = !is_fullscreen;
+                        if is_fullscreen {
+                            let monitor = window_for_loop
+                                .current_monitor()
+                                .or_else(|| window_for_loop.available_monitors().next());
+                            window_for_loop.set_fullscreen(Some(Fullscreen::Borderless(monitor)));
+                            info!("Entered fullscreen mode");
+                        } else {
+                            window_for_loop.set_fullscreen(None);
+                            info!("Exited fullscreen mode");
+                        }
+                    }
+                    KeyCode::F12 => {
+                        info!("Developer tools toggle requested (engine API required)");
+                    }
+                    KeyCode::Escape => {
+                        if is_fullscreen {
+                            is_fullscreen = false;
+                            window_for_loop.set_fullscreen(None);
+                            info!("Exited fullscreen mode with Escape");
+                        }
+                    }
+                    KeyCode::ArrowLeft => {
+                        info!("Navigate back requested (engine API required)");
+                    }
+                    KeyCode::ArrowRight => {
+                        info!("Navigate forward requested (engine API required)");
+                    }
+                    KeyCode::KeyL => {
+                        info!("Focus address bar requested (engine API required)");
+                    }
+                    KeyCode::KeyT => {
+                        info!("New tab requested (engine API required)");
+                    }
+                    KeyCode::KeyW => {
+                        info!("Close tab requested (engine API required)");
+                    }
+                    _ => {}
+                },
 
                 Event::AboutToWait => {
                     window_for_loop.request_redraw();
@@ -422,9 +425,7 @@ fn main() -> vulkan_browser_engine::Result<()> {
         .build()
         .expect("failed to build single-thread runtime");
 
-    let startup_start = app_config
-        .profile_startup
-        .then_some(Instant::now());
+    let startup_start = app_config.profile_startup.then_some(Instant::now());
 
     let browser_config = BrowserConfig::default();
 
@@ -441,7 +442,8 @@ fn main() -> vulkan_browser_engine::Result<()> {
         }
 
         // Park until Ctrl+C, then shutdown synchronously.
-        rt.block_on(signal::ctrl_c()).expect("Failed to listen for ctrl-c");
+        rt.block_on(signal::ctrl_c())
+            .expect("Failed to listen for ctrl-c");
         info!("Shutting down browser engine...");
         if let Err(e) = rt.block_on(async { engine.shutdown().await }) {
             error!("Shutdown error: {}", e);

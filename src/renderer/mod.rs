@@ -48,6 +48,7 @@ impl Default for Style {
 
 #[derive(Debug, Clone)]
 pub struct LayoutNode {
+    pub node_id: NodeId,
     pub bounds: Rect,
     pub element_type: ElementType,
     pub style: Style,
@@ -92,6 +93,7 @@ impl LayoutTree {
         element_type: ElementType, // Replace with your actual element type
     ) {
         let layout_node = LayoutNode {
+            node_id,
             bounds: Rect {
                 x: layout_box.content_x,
                 y: layout_box.content_y,
@@ -192,11 +194,27 @@ mod stubs {
         }
 
         pub fn get_rect_pipeline(&self) -> Result<DummyPipeline, RenderError> {
-            Ok(DummyPipeline::new())
+            if !self.initialized {
+                return Err(RenderError::PipelineError(
+                    "Pipeline cache not initialised".to_string(),
+                ));
+            }
+
+            let pipeline = DummyPipeline::new();
+            pipeline.touch();
+            Ok(pipeline)
         }
 
         pub fn get_image_pipeline(&self) -> Result<DummyPipeline, RenderError> {
-            Ok(DummyPipeline::new())
+            if !self.initialized {
+                return Err(RenderError::PipelineError(
+                    "Pipeline cache not initialised".to_string(),
+                ));
+            }
+
+            let pipeline = DummyPipeline::new();
+            pipeline.touch();
+            Ok(pipeline)
         }
     }
 
@@ -207,6 +225,10 @@ mod stubs {
     impl DummyPipeline {
         pub fn new() -> Self {
             Self { id: 0 }
+        }
+
+        pub fn touch(&self) {
+            let _ = self.id;
         }
     }
 
@@ -228,6 +250,11 @@ mod stubs {
             _font_family: &Option<String>,
             _font_size: f32,
         ) -> Result<(), RenderError> {
+            if !self.initialized {
+                return Err(RenderError::TextRenderError(
+                    "Text renderer not initialised".to_string(),
+                ));
+            }
             Ok(())
         }
     }
@@ -243,7 +270,9 @@ mod stubs {
 
         pub async fn load_image(&mut self, _url: &str) -> Result<DummyTexture, RenderError> {
             self.cache_size += 1;
-            Ok(DummyTexture::new())
+            let texture = DummyTexture::new();
+            texture.touch();
+            Ok(texture)
         }
     }
 
@@ -254,6 +283,10 @@ mod stubs {
     impl DummyTexture {
         pub fn new() -> Self {
             Self { id: 0 }
+        }
+
+        pub fn touch(&self) {
+            let _ = self.id;
         }
     }
 }
@@ -269,8 +302,8 @@ pub struct VulkanRenderer {
     frame_stats: FrameStats,
 }
 
-#[derive(Debug, Default)]
-struct FrameStats {
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FrameStats {
     vertices_rendered: u32,
     draw_calls: u32,
     texture_binds: u32,
