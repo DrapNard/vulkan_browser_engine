@@ -77,7 +77,7 @@ encoding_rs = "0.8.33"
 fontdb = "0.16.2"
 rustybuzz = "0.12.1"
 ttf-parser = "0.20.0"
-swash = "0.1.12"
+swash = "0.2.6"
 rusttype = "0.9.3"
 
 image = { version = "0.24.8", features = ["jpeg", "png", "webp", "gif", "ico", "bmp"] }
