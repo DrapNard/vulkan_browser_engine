@@ -98,7 +98,7 @@ moka = { version = "0.12.5", features = ["future"], optional = true }
 nix = { version = "0.28.0", features = ["process", "signal", "user"], optional = true }
 seccomp-sys = { version = "0.1.3", optional = true }
 
-tungstenite = "0.21.0"
+tungstenite = "0.27.0"
 tokio-tungstenite = "0.27.0"
 
 flate2 = "1.0.28"
